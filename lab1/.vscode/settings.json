@@ -1,0 +1,17 @@
+{
+    "files.associations": {
+        "*.sy": "c",
+        "out": "python",
+        "*.ir": "rust",
+        "*.s": "loongarch",
+        "vector": "cpp"
+    },
+    "github.copilot.enable": {
+        "*": true,
+        "plaintext": false,
+        "markdown": false,
+        "scminput": false,
+        "cpp": true,
+        "python": true
+    }
+}

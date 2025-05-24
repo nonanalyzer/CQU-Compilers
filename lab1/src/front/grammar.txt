@@ -1,0 +1,80 @@
+CompUnit -> (Decl | FuncDef) [CompUnit]
+Decl -> ConstDecl | VarDecl
+ConstDecl -> 'const' BType ConstDef { ',' ConstDef } ';'
+ ConstDecl.t
+BType -> 'int' | 'float'
+ BType.t 
+ConstDef -> Ident { '[' ConstExp ']' } '=' ConstInitVal
+ ConstDef.arr_name
+ConstInitVal -> ConstExp | '{' [ ConstInitVal { ',' ConstInitVal } ] '}'
+ ConstInitVal.v
+ ConstInitVal.t
+VarDecl -> BType VarDef { ',' VarDef } ';'
+ VarDecl.t
+VarDef -> Ident { '[' ConstExp ']' } [ '=' InitVal ]
+ VarDef.arr_name
+InitVal -> Exp | '{' [ InitVal { ',' InitVal } ] '}'
+ InitVal.is_computable
+ InitVal.v
+ InitVal.t
+FuncDef -> FuncType Ident '(' [FuncFParams] ')' Block
+ FuncDef.t 
+ FuncDef.n 
+FuncType -> 'void' | 'int' | 'float'
+FuncFParam -> BType Ident ['[' ']' { '[' Exp ']' }]
+FuncFParams -> FuncFParam { ',' FuncFParam }
+Block -> '{' { BlockItem } '}'
+BlockItem -> Decl | Stmt
+Stmt -> LVal '=' Exp ';' | Block | 'if' '(' Cond ')' Stmt [ 'else' Stmt ] | 'while' '(' Cond ')' Stmt | 'break' ';' | 'continue' ';' | 'return' [Exp] ';' | [Exp] ';'
+Exp -> AddExp
+ Exp.is_computable
+ Exp.v
+ Exp.t
+Cond -> LOrExp
+ Cond.is_computable
+ Cond.v
+ Cond.t
+LVal -> Ident {'[' Exp ']'}
+ LVal.is_computable
+ LVal.v
+ LVal.t
+ LVal.i
+Number -> IntConst | floatConst
+PrimaryExp -> '(' Exp ')' | LVal | Number
+ PrimaryExp.is_computable
+ PrimaryExp.v
+ PrimaryExp.t
+UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
+ UnaryExp.is_computable
+ UnaryExp.v
+ UnaryExp.t
+UnaryOp -> '+' | '-' | '!'
+FuncRParams -> Exp { ',' Exp }
+MulExp -> UnaryExp { ('*' | '/' | '%') UnaryExp }
+ MulExp.is_computable
+ MulExp.v
+ MulExp.t
+AddExp -> MulExp { ('+' | '-') MulExp }
+ AddExp.is_computable
+ AddExp.v
+ AddExp.t
+RelExp -> AddExp { ('<' | '>' | '<=' | '>=') AddExp }
+ RelExp.is_computable
+ RelExp.v
+ RelExp.t
+EqExp -> RelExp { ('==' | '!=') RelExp }
+ EqExp.is_computable
+ EqExp.v
+ EqExp.t
+LAndExp -> EqExp [ '&&' LAndExp ]
+ LAndExp.is_computable
+ LAndExp.v 
+ LAndExp.t 
+LOrExp -> LAndExp [ '||' LOrExp ]
+ LOrExp.is_computable 
+ LOrExp.v 
+ LOrExp.t
+ConstExp -> AddExp
+ ConstExp.is_computable: true 
+ ConstExp.v
+ ConstExp.t

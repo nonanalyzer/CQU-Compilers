@@ -1,0 +1,32 @@
+[
+{
+  "directory": "D:/Course/compilers/lab/lab1/build",
+  "command": "C:\\PROGRA~1\\mingw64\\bin\\G__~1.EXE   @CMakeFiles/Front.dir/includes_CXX.rsp -Wall -g   -std=gnu++14 -o CMakeFiles\\Front.dir\\src\\front\\abstract_syntax_tree.cpp.obj -c D:\\Course\\compilers\\lab\\lab1\\src\\front\\abstract_syntax_tree.cpp",
+  "file": "D:/Course/compilers/lab/lab1/src/front/abstract_syntax_tree.cpp"
+},
+{
+  "directory": "D:/Course/compilers/lab/lab1/build",
+  "command": "C:\\PROGRA~1\\mingw64\\bin\\G__~1.EXE   @CMakeFiles/Front.dir/includes_CXX.rsp -Wall -g   -std=gnu++14 -o CMakeFiles\\Front.dir\\src\\front\\lexical.cpp.obj -c D:\\Course\\compilers\\lab\\lab1\\src\\front\\lexical.cpp",
+  "file": "D:/Course/compilers/lab/lab1/src/front/lexical.cpp"
+},
+{
+  "directory": "D:/Course/compilers/lab/lab1/build",
+  "command": "C:\\PROGRA~1\\mingw64\\bin\\G__~1.EXE   @CMakeFiles/Front.dir/includes_CXX.rsp -Wall -g   -std=gnu++14 -o CMakeFiles\\Front.dir\\src\\front\\syntax.cpp.obj -c D:\\Course\\compilers\\lab\\lab1\\src\\front\\syntax.cpp",
+  "file": "D:/Course/compilers/lab/lab1/src/front/syntax.cpp"
+},
+{
+  "directory": "D:/Course/compilers/lab/lab1/build",
+  "command": "C:\\PROGRA~1\\mingw64\\bin\\G__~1.EXE   @CMakeFiles/Front.dir/includes_CXX.rsp -Wall -g   -std=gnu++14 -o CMakeFiles\\Front.dir\\src\\front\\token.cpp.obj -c D:\\Course\\compilers\\lab\\lab1\\src\\front\\token.cpp",
+  "file": "D:/Course/compilers/lab/lab1/src/front/token.cpp"
+},
+{
+  "directory": "D:/Course/compilers/lab/lab1/build",
+  "command": "C:\\PROGRA~1\\mingw64\\bin\\G__~1.EXE   @CMakeFiles/jsoncpp.dir/includes_CXX.rsp -Wall -g   -std=gnu++14 -o CMakeFiles\\jsoncpp.dir\\src\\third_party\\jsoncpp\\jsoncpp.cpp.obj -c D:\\Course\\compilers\\lab\\lab1\\src\\third_party\\jsoncpp\\jsoncpp.cpp",
+  "file": "D:/Course/compilers/lab/lab1/src/third_party/jsoncpp/jsoncpp.cpp"
+},
+{
+  "directory": "D:/Course/compilers/lab/lab1/build",
+  "command": "C:\\PROGRA~1\\mingw64\\bin\\G__~1.EXE   @CMakeFiles/compiler.dir/includes_CXX.rsp -Wall -g   -std=gnu++14 -o CMakeFiles\\compiler.dir\\main.cpp.obj -c D:\\Course\\compilers\\lab\\lab1\\main.cpp",
+  "file": "D:/Course/compilers/lab/lab1/main.cpp"
+}
+]

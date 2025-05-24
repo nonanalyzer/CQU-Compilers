@@ -1,0 +1,54 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "My Debug Compiler (Windows)",
+        "type": "cppvsdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/bin/compiler.exe",
+        "args": [
+          "${workspaceFolder}/bin/data.in", // "${input:source-file}",
+          "-s1", // "${input:step-option}",
+          "-o",
+          "${workspaceFolder}/bin/output.out" // "${input:output-file}"
+        ],
+        "stopAtEntry": true,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "console": "externalTerminal",
+        // "preLaunchTask": "build-compiler"
+      }
+    ],
+    "inputs": [
+      {
+        "id": "debugger-type",
+        "type": "pickString",
+        "description": "Debugger to use",
+        "options": [
+          "gdb",
+          "lldb"
+        ]
+      },
+      {
+        "id": "source-file",
+        "type": "promptString",
+        "description": "Source file to compile"
+      },
+      {
+        "id": "step-option",
+        "type": "pickString",
+        "description": "Compilation step",
+        "options": [
+          "-s0",
+          "-s1",
+          "-s2",
+          "-S"
+        ]
+      },
+      {
+        "id": "output-file",
+        "type": "promptString",
+        "description": "Output file path"
+      }
+    ]
+  }
