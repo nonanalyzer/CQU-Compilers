@@ -30,6 +30,9 @@ namespace frontend
 struct STE {
     ir::Operand operand;
     vector<int> dimension;
+    STE() = default;
+    STE(const ir::Operand& op, const vector<int>& dim = {})
+        : operand(op), dimension(dim) {}
 };
 
 using map_str_ste = map<string, STE>;
@@ -107,6 +110,42 @@ struct Analyzer {
     // reject copy & assignment
     Analyzer(const Analyzer&) = delete;
     Analyzer& operator=(const Analyzer&) = delete;
+
+    // 语义分析函数
+    void analyzeCompUnit(CompUnit*);
+    void analyzeDecl(Decl*, vector<ir::Instruction*>&);
+    void analyzeFuncDef(FuncDef*);
+    void analyzeFuncType(FuncType*);
+    void analyzeTerm(Term*);
+    void analyzeFuncFParams(FuncFParams*, vector<ir::Operand>&);
+    void analyzeFuncFParam(FuncFParam*, vector<ir::Operand>&);
+    void analyzeBlock(Block*, vector<ir::Instruction*>&);
+    void analyzeBlockItem(BlockItem*, vector<ir::Instruction*>&);
+    void analyzeStmt(Stmt*, vector<ir::Instruction*>&);
+    void analyzeExp(Exp*, vector<ir::Instruction*>&);
+    void analyzeAddExp(AddExp*, vector<ir::Instruction*>&);
+    void analyzeMulExp(MulExp*, vector<ir::Instruction*>&);
+    void analyzeUnaryExp(UnaryExp*, vector<ir::Instruction*>&);
+    void analyzePrimaryExp(PrimaryExp*, vector<ir::Instruction*>&);
+    void analyzeNumber(Number*, vector<ir::Instruction*>&);
+    void analyzeVarDecl(VarDecl*, vector<ir::Instruction*>&);
+    void analyzeBType(BType*);
+    void analyzeVarDef(VarDef*, vector<ir::Instruction*>&, ir::Type);
+    void analyzeConstExp(ConstExp*);
+    void analyzeInitVal(InitVal*, vector<ir::Instruction*>&, int, int, int, vector<int>&);
+    void analyzeLVal(LVal*, vector<ir::Instruction*>&);
+    void analyzeConstDecl(ConstDecl*, vector<ir::Instruction*>&);
+    void analyzeConstDef(ConstDef*, vector<ir::Instruction*>&, ir::Type);
+    void analyzeConstInitVal(ConstInitVal*, vector<ir::Instruction*>&, int, int, int, vector<int>&);
+    void analyzeFuncRParams(FuncRParams*, vector<ir::Instruction*>&, vector<ir::Operand>&, vector<ir::Operand>&);
+    void analyzeCond(Cond*, vector<ir::Instruction*>&);
+    void analyzeLOrExp(LOrExp*, vector<ir::Instruction*>&);
+    void analyzeLAndExp(LAndExp*, vector<ir::Instruction*>&);
+    void analyzeEqExp(EqExp*, vector<ir::Instruction*>&);
+    void analyzeRelExp(RelExp*, vector<ir::Instruction*>&);
+    void analyzeUnaryOp(UnaryOp*);
+
+    string getTmpName();
 };
 
 } // namespace frontend
