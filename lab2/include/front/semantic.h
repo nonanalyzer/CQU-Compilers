@@ -55,7 +55,7 @@ struct SymbolTable{
      * @brief enter a new scope, record the infomation in scope stacks
      * @param node: a Block node, entering a new Block means a new name scope
      */
-    void add_scope(Block*);
+    void add_scope();
 
     /**
      * @brief exit a scope, pop out infomations
@@ -112,7 +112,7 @@ struct Analyzer {
     Analyzer& operator=(const Analyzer&) = delete;
 
     // 语义分析函数
-    void analyzeCompUnit(CompUnit*);
+    void analyzeCompUnit(CompUnit*, ir::Program&);
     void analyzeDecl(Decl*, vector<ir::Instruction*>&);
     void analyzeFuncDef(FuncDef*);
     void analyzeFuncType(FuncType*);
@@ -131,12 +131,12 @@ struct Analyzer {
     void analyzeVarDecl(VarDecl*, vector<ir::Instruction*>&);
     void analyzeBType(BType*);
     void analyzeVarDef(VarDef*, vector<ir::Instruction*>&, ir::Type);
-    void analyzeConstExp(ConstExp*);
-    void analyzeInitVal(InitVal*, vector<ir::Instruction*>&, int, int, int, vector<int>&);
+    void analyzeConstExp(ConstExp*, vector<ir::Instruction*>&);
+    void analyzeInitVal(InitVal*, vector<ir::Instruction*>&, int, int, vector<int>&);
     void analyzeLVal(LVal*, vector<ir::Instruction*>&);
     void analyzeConstDecl(ConstDecl*, vector<ir::Instruction*>&);
     void analyzeConstDef(ConstDef*, vector<ir::Instruction*>&, ir::Type);
-    void analyzeConstInitVal(ConstInitVal*, vector<ir::Instruction*>&, int, int, int, vector<int>&);
+    void analyzeConstInitVal(ConstInitVal*, vector<ir::Instruction*>&, int, int, vector<int>&);
     void analyzeFuncRParams(FuncRParams*, vector<ir::Instruction*>&, vector<ir::Operand>&, vector<ir::Operand>&);
     void analyzeCond(Cond*, vector<ir::Instruction*>&);
     void analyzeLOrExp(LOrExp*, vector<ir::Instruction*>&);

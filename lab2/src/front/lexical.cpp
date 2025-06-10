@@ -37,6 +37,12 @@ bool frontend::DFA::next(char input, Token& buf) {
 #endif
     switch(cur_state){
         case State::Empty:
+            // Empty to Float
+            if(input == '.'){
+                cur_state = State::FloatLiteral;
+                cur_str = input;
+                return false;
+            }
             // Empty to op
             if(ispunct(input) && input != '_'){
                 cur_state = State::op;
@@ -173,6 +179,7 @@ bool frontend::DFA::next(char input, Token& buf) {
                 #ifdef DEBUG_DFA
                 std::cout << "in get_op_type, str = " << str << std::endl;
                 #endif
+                std::cerr << "illegal operator: " << str << std::endl;
                 assert(0 && "illegal op");
             };
             // op to Empty
@@ -187,6 +194,14 @@ bool frontend::DFA::next(char input, Token& buf) {
                 buf.value = cur_str;
                 buf.type = get_op_type(cur_str);
                 cur_state = State::IntLiteral;
+                cur_str = input;
+                return true;
+            }
+            // op to Float
+            if(input == '.'){
+                buf.value = cur_str;
+                buf.type = get_op_type(cur_str);
+                cur_state = State::FloatLiteral;
                 cur_str = input;
                 return true;
             }
