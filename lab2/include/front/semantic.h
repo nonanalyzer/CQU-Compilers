@@ -114,11 +114,10 @@ struct Analyzer {
     // 语义分析函数
     void analyzeCompUnit(CompUnit*, ir::Program&);
     void analyzeDecl(Decl*, vector<ir::Instruction*>&);
-    void analyzeFuncDef(FuncDef*);
-    void analyzeFuncType(FuncType*);
-    void analyzeTerm(Term*);
-    void analyzeFuncFParams(FuncFParams*, vector<ir::Operand>&);
-    void analyzeFuncFParam(FuncFParam*, vector<ir::Operand>&);
+    void analyzeFuncDef(FuncDef*, ir::Function&);
+    Type analyzeFuncType(FuncType*);
+    void analyzeFuncFParams(FuncFParams*, ir::Function&);
+    void analyzeFuncFParam(FuncFParam*, ir::Function&);
     void analyzeBlock(Block*, vector<ir::Instruction*>&);
     void analyzeBlockItem(BlockItem*, vector<ir::Instruction*>&);
     void analyzeStmt(Stmt*, vector<ir::Instruction*>&);
@@ -143,7 +142,7 @@ struct Analyzer {
     void analyzeLAndExp(LAndExp*, vector<ir::Instruction*>&);
     void analyzeEqExp(EqExp*, vector<ir::Instruction*>&);
     void analyzeRelExp(RelExp*, vector<ir::Instruction*>&);
-    void analyzeUnaryOp(UnaryOp*);
+    void analyzeUnaryOp(UnaryOp*, vector<ir::Instruction*>&);
 
     string getTmpName();
 };

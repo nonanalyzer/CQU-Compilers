@@ -114,7 +114,9 @@ void frontend::Analyzer::analyzeCompUnit(CompUnit* root, ir::Program& buffer){
     }
     else if(MATCH_CHILD_TYPE(FUNCDEF, 0)){
         GET_CHILD_PTR(funcDef, FuncDef, 0);
-        analyzeFuncDef(funcDef);
+        auto function = ir::Function();
+        analyzeFuncDef(funcDef, function);
+        buffer.addFunction(function);
     }
     else{
         assert(0 && "analyzeCompUnit error: expected Decl or FuncDef");
@@ -169,7 +171,6 @@ void frontend::Analyzer::analyzeVarDecl(VarDecl* root, vector<ir::Instruction*>&
 void frontend::Analyzer::analyzeConstDef(ConstDef* root, vector<ir::Instruction*>& buffer, ir::Type t) {
     // 变量名ident
     GET_CHILD_PTR(ident, Term, 0);
-    analyzeTerm(ident);
     root->arr_name = symbol_table.get_scoped_name(ident->token.value);
 
     vector<int> dims;
@@ -314,12 +315,12 @@ void frontend::Analyzer::analyzeConstInitVal(ConstInitVal* root, vector<ir::Inst
 
 // BType -> 'int' | 'float'
 void frontend::Analyzer::analyzeBType(BType* root) {
-    auto type_node = dynamic_cast<Term*>(root->children[0]);
-    if(type_node){
-        if(type_node->token.value == "int"){
+    GET_CHILD_PTR(type, Term, 0);
+    if(type){
+        if(type->token.value == "int"){
             root->t = ir::Type::Int;
         }
-        else if(type_node->token.value == "float"){
+        else if(type->token.value == "float"){
             root->t = ir::Type::Float;
         }
         else{
@@ -335,7 +336,6 @@ void frontend::Analyzer::analyzeBType(BType* root) {
 void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& buffer, ir::Type t) {
     // 变量名ident
     GET_CHILD_PTR(ident, Term, 0);
-    analyzeTerm(ident);
     root->arr_name = symbol_table.get_scoped_name(ident->token.value);
 
     vector<int> dims;
@@ -481,38 +481,84 @@ void frontend::Analyzer::analyzeInitVal(InitVal* root, vector<ir::Instruction*>&
 }
 
 // FuncDef -> FuncType Ident '(' [FuncFParams] ')' Block
-void frontend::Analyzer::analyzeFuncDef(FuncDef* root) {
-    TODO;
+void frontend::Analyzer::analyzeFuncDef(FuncDef* root, ir::Function& func) {
+    GET_CHILD_PTR(funcType, FuncType, 0);
+    GET_CHILD_PTR(ident, Term, 1);
+    func.returnType = root->t = analyzeFuncType(funcType);
+    func.name = root->n = ident->token.value;
+    symbol_table.functions[func.name] = &func;
+    // 从形参开始进入新作用域
+    symbol_table.add_scope();
+
+    if(func.name == "main") {
+        func.addInst(new ir::CallInst(
+                            Operand("global", Type::null),
+                            vector<ir::Operand>(),
+                            Operand(getTmpName(), Type::null)
+                        ));
+    }
+
+    if(root->children.size() > 3 && MATCH_CHILD_TYPE(FUNCFPARAMS, 3)){
+        GET_CHILD_PTR(funcFParams, FuncFParams, 3);
+        analyzeFuncFParams(funcFParams, func);
+        GET_CHILD_PTR(block, Block, 5);
+        analyzeBlock(block, func.InstVec);
+    }
+    else{
+        GET_CHILD_PTR(block, Block, 4);
+        analyzeBlock(block, func.InstVec);
+    }
+
+    if(func.returnType == Type::null){
+        func.addInst(new Instruction(Operand("null", Type::null), Operand(), Operand(), Operator::_return));
+    }
+
+    symbol_table.exit_scope();
 }
 
 // FuncType -> 'void' | 'int' | 'float'
-void frontend::Analyzer::analyzeFuncType(FuncType* root) {
-    TODO;
+Type frontend::Analyzer::analyzeFuncType(FuncType* root) {
+    GET_CHILD_PTR(tk, Term, 0);
+    if(tk->token.type == TokenType::VOIDTK) return Type::null;
+    else if(tk->token.type == TokenType::INTTK) return Type::Int;
+    else if(tk->token.type == TokenType::FLOATTK) return Type::Float;
+    else assert(0 && "FuncType error: unknown type");
 }
 
 // FuncFParams -> FuncFParam { ',' FuncFParam }
-void frontend::Analyzer::analyzeFuncFParams(FuncFParams* root, vector<ir::Operand>& params) {
+void frontend::Analyzer::analyzeFuncFParams(FuncFParams* root, ir::Function& buffer) {
     for(size_t i = 0; i < root->children.size(); i += 2){
         GET_CHILD_PTR(param, FuncFParam, i);
-        analyzeFuncFParam(param, params);
+        analyzeFuncFParam(param, buffer);
     }
 }
 
 // FuncFParam -> BType Ident ['[' ']' { '[' Exp ']' }]
-void frontend::Analyzer::analyzeFuncFParam(FuncFParam* root, vector<ir::Operand>& params) {
-    TODO;
+void frontend::Analyzer::analyzeFuncFParam(FuncFParam* root, ir::Function& buffer) {
+    GET_CHILD_PTR(btype, BType, 0);
+    analyzeBType(btype);
+    GET_CHILD_PTR(ident, Term, 1);
+    std::string name = ident->token.value;
+    auto type = btype->t;
+    if(root->children.size() > 2) type = type == Type::Int ? Type::IntPtr : Type::FloatPtr; // 数组
+    buffer.ParameterList.push_back(Operand(name, type));
+    symbol_table.scope_stack.back().table[name] = STE(Operand(name, type), {});
 }
 
 // Block -> '{' { BlockItem } '}'
 void frontend::Analyzer::analyzeBlock(Block* root, vector<ir::Instruction*>& buffer) {
+    symbol_table.add_scope(); // 先添加作用域
+
     for(size_t i = 1; i + 1 < root->children.size(); ++i){
         GET_CHILD_PTR(item, BlockItem, i);
         analyzeBlockItem(item, buffer);
     }
+
+    symbol_table.exit_scope();
 }
 
+// BlockItem -> Decl | Stmt
 void frontend::Analyzer::analyzeBlockItem(BlockItem* root, vector<ir::Instruction*>& buffer) {
-    // BlockItem -> Decl | Stmt
     if(MATCH_CHILD_TYPE(DECL, 0)){
         GET_CHILD_PTR(decl, Decl, 0);
         analyzeDecl(decl, buffer);
@@ -565,11 +611,37 @@ void frontend::Analyzer::analyzePrimaryExp(PrimaryExp* root, vector<ir::Instruct
 
 // Number -> IntConst | floatConst
 void frontend::Analyzer::analyzeNumber(Number* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    GET_CHILD_PTR(term, Term, 0);
+    if(term->token.type == TokenType::INTLTR){
+        root->t = Type::IntLiteral;
+        root->v = term->token.value;
+        // 对二、八、十六进制数字进行转换
+        if(root->v.size() > 2 && root->v[0] == '0'){
+            if(root->v[1] == 'x' || root->v[1] == 'X'){
+                // 十六进制
+                root->v = std::to_string(std::stoi(root->v, nullptr, 16));
+            }
+            else if(root->v[1] == 'b' || root->v[1] == 'B'){
+                // 二进制
+                root->v = std::to_string(std::stoi(root->v, nullptr, 2));
+            }
+            else{
+                // 八进制 他可能只有单个前导零而不是0o
+                root->v = std::to_string(std::stoi(root->v, nullptr, 8));
+            }
+        }
+    }
+    else if(term->token.type == TokenType::FLOATLTR){
+        root->t = Type::FloatLiteral;
+        root->v = term->token.value;
+    }
+    else{
+        assert(0 && "Number error: expected IntConst or FloatConst");
+    }
 }
 
 // UnaryOp -> '+' | '-' | '!'
-void frontend::Analyzer::analyzeUnaryOp(UnaryOp* root) {
+void frontend::Analyzer::analyzeUnaryOp(UnaryOp* root, vector<ir::Instruction*>& buffer) {
     TODO;
 }
 
@@ -581,8 +653,7 @@ void frontend::Analyzer::analyzeFuncRParams(FuncRParams* root, vector<ir::Instru
         params.push_back(ir::Operand(exp->v, exp->t));
         types.push_back(ir::Operand(exp->v, exp->t));
     }
-    // 似乎浮点数需要特殊处理，等会儿补充
-    TODO;
+    // 似乎浮点数需要特殊处理，再说吧
 }
 
 // Cond -> LOrExp
@@ -616,9 +687,5 @@ void frontend::Analyzer::analyzeRelExp(RelExp* root, vector<ir::Instruction*>& b
 void frontend::Analyzer::analyzeConstExp(ConstExp* root, vector<ir::Instruction*>& buffer) {
     GET_CHILD_PTR(addExp, AddExp, 0);
     analyzeAddExp(addExp, buffer);
-    COPY_EXP_NODE(addExp, root);
-}
-
-void frontend::Analyzer::analyzeTerm(Term* root) {
-    TODO;
+    COPY_EXP_NODE(addExp, root); 
 }
