@@ -12,7 +12,7 @@ using ir::Operator;
 #define MATCH_CHILD_TYPE(node, index) root->children[index]->type == NodeType::node
 #define GET_CHILD_PTR(node, type, index) auto node = dynamic_cast<type*>(root->children[index]); assert(node); 
 #define ANALYSIS(node, type, index) auto node = dynamic_cast<type*>(root->children[index]); assert(node); analysis##type(node, buffer);
-#define COPY_EXP_NODE(from, to) /*to->is_computable = from->is_computable;*/ to->v = from->v; to->t = from->t;
+#define COPY_EXP_NODE(from, to) to->is_computable = from->is_computable; to->v = from->v; to->t = from->t;
 
 map<std::string,ir::Function*>* frontend::get_lib_funcs() {
     static map<std::string,ir::Function*> lib_funcs = {
@@ -574,12 +574,194 @@ void frontend::Analyzer::analyzeBlockItem(BlockItem* root, vector<ir::Instructio
 
 // Stmt -> LVal '=' Exp ';' | Block | 'if' '(' Cond ')' Stmt [ 'else' Stmt ] | 'while' '(' Cond ')' Stmt | 'break' ';' | 'continue' ';' | 'return' [Exp] ';' | [Exp] ';'
 void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // assignment: LVal '=' Exp ';'
+    if(MATCH_CHILD_TYPE(LVAL,0)) {
+        // expect '=' then Exp
+        GET_CHILD_PTR(lval, LVal, 0);
+        GET_CHILD_PTR(assignT, Term, 1);
+        if(assignT->token.type == TokenType::ASSIGN) {
+            analyzeLVal(lval, buffer);
+            GET_CHILD_PTR(exp, Exp, 2);
+            analyzeExp(exp, buffer);
+            Operator opc = (lval->t == Type::Float) ? Operator::fmov : Operator::mov;
+            buffer.push_back(new Instruction(
+                Operand(lval->v, lval->t), Operand(), Operand(exp->v, exp->t), opc
+            ));
+            return;
+        }
+    }
+    // return statement
+    if(MATCH_CHILD_TYPE(TERMINAL, 0)) {
+        GET_CHILD_PTR(term, Term, 0);
+        if(term->token.type == TokenType::RETURNTK) {
+            if(root->children.size()>2 && root->children[1]->type==NodeType::EXP) {
+                GET_CHILD_PTR(exp, Exp, 1);
+                analyzeExp(exp, buffer);
+                buffer.push_back(new Instruction(
+                    Operand(exp->v, exp->t), Operand(), Operand(), Operator::_return
+                ));
+            } else {
+                buffer.push_back(new Instruction(Operand("null", Type::null), Operand(), Operand(), Operator::_return));
+            }
+            return;
+        }
+    }
+    // block
+    if(MATCH_CHILD_TYPE(BLOCK,0)) {
+        GET_CHILD_PTR(block, Block, 0);
+        analyzeBlock(block, buffer);
+        return;
+    }
+    // if statement
+    if(MATCH_CHILD_TYPE(TERMINAL,0)){
+        GET_CHILD_PTR(term, Term, 0);
+        if(term->token.type == TokenType::IFTK){
+            // if '(' Cond ')' Stmt [ 'else' Stmt ]
+            GET_CHILD_PTR(cond, Cond, 2);
+            analyzeCond(cond, buffer);
+            // invert cond for false jump
+            std::string notVar = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(cond->v, Type::Int), Operand(), Operand(notVar, Type::Int), Operator::_not
+            ));
+            // placeholder jump to else or end
+            auto condJump = new Instruction(
+                Operand(notVar, Type::Int), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+            );
+            buffer.push_back(condJump);
+            // then branch
+            GET_CHILD_PTR(thenStmt, Stmt, 4);
+            analyzeStmt(thenStmt, buffer);
+            if(root->children.size() > 5 && root->children[5]->type == NodeType::TERMINAL){
+                // has else
+                // skip goto after then
+                int skipPos = buffer.size();
+                auto skipJump = new Instruction(
+                    Operand("null", Type::null), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+                );
+                buffer.push_back(skipJump);
+                // patch condJump to else branch
+                condJump->des = Operand(std::to_string(skipPos+1), Type::IntLiteral);
+                // else branch
+                GET_CHILD_PTR(elseStmt, Stmt, 6);
+                analyzeStmt(elseStmt, buffer);
+                // patch skipJump to after else
+                skipJump->des = Operand(std::to_string(buffer.size()), Type::IntLiteral);
+            } else {
+                // no else: patch condJump to after then
+                condJump->des = Operand(std::to_string(buffer.size()), Type::IntLiteral);
+            }
+            return;
+        }
+        // while statement
+        if(term->token.type == TokenType::WHILETK){
+            // while '(' Cond ')' Stmt
+            // record loop start
+            int loopStart = buffer.size();
+            GET_CHILD_PTR(cond, Cond, 2);
+            analyzeCond(cond, buffer);
+            // invert cond for exit
+            std::string notVar2 = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(cond->v, Type::Int), Operand(), Operand(notVar2, Type::Int), Operator::_not
+            ));
+            // placeholder exit jump
+            auto exitJump = new Instruction(
+                Operand(notVar2, Type::Int), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+            );
+            buffer.push_back(exitJump);
+            // body
+            GET_CHILD_PTR(bodyStmt, Stmt, 4);
+            analyzeStmt(bodyStmt, buffer);
+            // after body, jump back to loop start
+            buffer.push_back(new Instruction(
+                Operand("null", Type::null), Operand(), Operand(std::to_string(loopStart), Type::IntLiteral), Operator::_goto
+            ));
+            // patch continue jumps to loop start
+            for(auto inst: root->jump_bow){ inst->des = Operand(std::to_string(loopStart), Type::IntLiteral); }
+            // patch break jumps to after loop
+            int loopEnd = buffer.size();
+            for(auto inst: root->jump_eow){ inst->des = Operand(std::to_string(loopEnd), Type::IntLiteral); }
+            // patch exitJump
+            exitJump->des = Operand(std::to_string(loopEnd), Type::IntLiteral);
+            return;
+        }
+        // break
+        if(term->token.type == TokenType::BREAKTK){
+            auto brJump = new Instruction(
+                Operand("null", Type::null), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+            );
+            buffer.push_back(brJump);
+            // find enclosing while
+            AstNode* p = root->parent;
+            while(p && !(p->type == NodeType::STMT && p->children.size()>0 && p->children[0]->type==NodeType::TERMINAL && dynamic_cast<Term*>(p->children[0])->token.type==TokenType::WHILETK)){
+                p = p->parent;
+            }
+            assert(p && "break not within loop");
+            dynamic_cast<Stmt*>(p)->jump_eow.insert(brJump);
+            return;
+        }
+        // continue
+        if(term->token.type == TokenType::CONTINUETK){
+            auto contJump = new Instruction(
+                Operand("null", Type::null), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+            );
+            buffer.push_back(contJump);
+            // find enclosing while
+            AstNode* p = root->parent;
+            while(p && !(p->type == NodeType::STMT && p->children.size()>0 && p->children[0]->type==NodeType::TERMINAL && dynamic_cast<Term*>(p->children[0])->token.type==TokenType::WHILETK)){
+                p = p->parent;
+            }
+            assert(p && "continue not within loop");
+            dynamic_cast<Stmt*>(p)->jump_bow.insert(contJump);
+            return;
+        }
+        // empty statement ';'
+        if(term->token.type == TokenType::SEMICN) {
+            // no operation
+            return;
+        }
+    }
+    // expression statement: [Exp] ';'
+    if(root->children.size()>0 && root->children[0]->type==NodeType::EXP){
+        GET_CHILD_PTR(exp, Exp, 0);
+        analyzeExp(exp, buffer);
+        return;
+    }
+    // unsupported
+    assert(0 && "analyzeStmt: unsupported statement");
 }
 
 // LVal -> Ident {'[' Exp ']'
 void frontend::Analyzer::analyzeLVal(LVal* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // LVal -> Ident {'[' Exp ']'}
+    GET_CHILD_PTR(ident, Term, 0);
+    std::string name = ident->token.value;
+    ir::Operand base = symbol_table.get_operand(name);
+    if (root->children.size() == 1) {
+        // simple variable
+        root->is_computable = false;
+        root->v = base.name;
+        root->t = base.type;
+    } else {
+        // array element access chain
+        ir::Operand cur = base;
+        for (size_t i = 1; i + 1 < root->children.size(); i += 2) {
+            GET_CHILD_PTR(exp, Exp, i+1);
+            analyzeExp(exp, buffer);
+            std::string tmp = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(cur.name, cur.type),
+                Operand(exp->v, exp->t),
+                Operand(tmp, cur.type == Type::IntPtr ? Type::Int : Type::Float),
+                Operator::load
+            ));
+            cur = Operand(tmp, cur.type == Type::IntPtr ? Type::Int : Type::Float);
+        }
+        root->is_computable = false;
+        root->v = cur.name;
+        root->t = cur.type;
+    }
 }
 
 // Exp -> AddExp
@@ -591,22 +773,267 @@ void frontend::Analyzer::analyzeExp(Exp* root, vector<ir::Instruction*>& buffer)
 
 // AddExp -> MulExp { ('+' | '-') MulExp }
 void frontend::Analyzer::analyzeAddExp(AddExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // AddExp -> MulExp { ('+' | '-') MulExp }
+    // 初始项
+    GET_CHILD_PTR(first, MulExp, 0);
+    analyzeMulExp(first, buffer);
+    root->is_computable = first->is_computable;
+    root->v = first->v;
+    root->t = first->t;
+    // 后续加减
+    for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
+        // 运算符
+        GET_CHILD_PTR(opTerm, Term, i);
+        std::string op = opTerm->token.value;
+        // 右操作数
+        GET_CHILD_PTR(next, MulExp, i+1);
+        analyzeMulExp(next, buffer);
+        // 常量合并
+        if(root->is_computable && next->is_computable) {
+            if(root->t == Type::Int) {
+                int l = std::stoi(root->v);
+                int r = std::stoi(next->v);
+                int res = (op == "+" ? l + r : l - r);
+                root->v = std::to_string(res);
+                root->t = Type::IntLiteral;
+            } else {
+                double l = std::stod(root->v);
+                double r = std::stod(next->v);
+                double res = (op == "+" ? l + r : l - r);
+                root->v = std::to_string(res);
+                root->t = Type::FloatLiteral;
+            }
+            root->is_computable = true;
+        } else {
+            // 生成 IR
+            std::string dst = getTmpName();
+            if(root->t == Type::Int) {
+                // 立即数加减
+                if(next->t == Type::IntLiteral) {
+                    buffer.push_back(new Instruction(
+                        Operand(root->v, Type::Int),
+                        Operand(next->v, Type::IntLiteral),
+                        Operand(dst, Type::Int),
+                        op == "+" ? Operator::addi : Operator::subi
+                    ));
+                } else {
+                    buffer.push_back(new Instruction(
+                        Operand(root->v, Type::Int),
+                        Operand(next->v, Type::Int),
+                        Operand(dst, Type::Int),
+                        op == "+" ? Operator::add : Operator::sub
+                    ));
+                }
+            } else {
+                // 浮点加减
+                buffer.push_back(new Instruction(
+                    Operand(root->v, Type::Float),
+                    Operand(next->v, Type::Float),
+                    Operand(dst, Type::Float),
+                    op == "+" ? Operator::fadd : Operator::fsub
+                ));
+            }
+            root->v = dst;
+            root->t = root->t == Type::IntLiteral ? Type::Int : root->t; // 若初始为Literal，结果为普通类型
+            root->is_computable = false;
+        }
+    }
 }
 
 // MulExp -> UnaryExp { ('*' | '/' | '%') UnaryExp }
 void frontend::Analyzer::analyzeMulExp(MulExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // MulExp -> UnaryExp { ('*' | '/' | '%') UnaryExp }
+    GET_CHILD_PTR(first, UnaryExp, 0);
+    analyzeUnaryExp(first, buffer);
+    root->is_computable = first->is_computable;
+    root->v = first->v;
+    root->t = first->t;
+    for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
+        GET_CHILD_PTR(opTerm, Term, i);
+        std::string op = opTerm->token.value;
+        GET_CHILD_PTR(next, UnaryExp, i+1);
+        analyzeUnaryExp(next, buffer);
+        // 常量合并
+        if(root->is_computable && next->is_computable) {
+            if(root->t == Type::Int) {
+                int l = std::stoi(root->v);
+                int r = std::stoi(next->v);
+                int res = 0;
+                if(op == "*") res = l * r;
+                else if(op == "/") res = l / r;
+                else if(op == "%") res = l % r;
+                root->v = std::to_string(res);
+                root->t = Type::IntLiteral;
+            } else {
+                double l = std::stod(root->v);
+                double r = std::stod(next->v);
+                double res = (op == "*") ? l * r : l / r;
+                root->v = std::to_string(res);
+                root->t = Type::FloatLiteral;
+            }
+            root->is_computable = true;
+        } else {
+            // 非常量，生成 IR，处理立即数
+            std::string dst = getTmpName();
+            std::string lop = root->v;
+            std::string rop = next->v;
+            // 如果左操作数是立即数，先def 一个临时变量
+            if(root->t == Type::IntLiteral) {
+                std::string tmpL = getTmpName();
+                buffer.push_back(new Instruction(
+                    Operand(root->v, Type::IntLiteral), Operand(), Operand(tmpL, Type::Int), Operator::def
+                ));
+                lop = tmpL;
+            }
+            // 如果右操作数是立即数，先def 一个临时变量
+            if(next->t == Type::IntLiteral) {
+                std::string tmpR = getTmpName();
+                buffer.push_back(new Instruction(
+                    Operand(next->v, Type::IntLiteral), Operand(), Operand(tmpR, Type::Int), Operator::def
+                ));
+                rop = tmpR;
+            }
+            if(root->t == Type::Int) {
+                // 整型运算
+                Operator opc = (op == "*") ? Operator::mul : (op == "/" ? Operator::div : Operator::mod);
+                buffer.push_back(new Instruction(
+                    Operand(lop, Type::Int), Operand(rop, Type::Int), Operand(dst, Type::Int), opc
+                ));
+                root->t = Type::Int;
+            } else {
+                // 浮点运算
+                // 处理浮点立即数
+                if(root->t == Type::FloatLiteral) {
+                    std::string tmpLf = getTmpName();
+                    buffer.push_back(new Instruction(
+                        Operand(root->v, Type::FloatLiteral), Operand(), Operand(tmpLf, Type::Float), Operator::fdef
+                    ));
+                    lop = tmpLf;
+                }
+                if(next->t == Type::FloatLiteral) {
+                    std::string tmpRf = getTmpName();
+                    buffer.push_back(new Instruction(
+                        Operand(next->v, Type::FloatLiteral), Operand(), Operand(tmpRf, Type::Float), Operator::fdef
+                    ));
+                    rop = tmpRf;
+                }
+                Operator opc = (op == "*") ? Operator::fmul : Operator::fdiv;
+                buffer.push_back(new Instruction(
+                    Operand(lop, Type::Float), Operand(rop, Type::Float), Operand(dst, Type::Float), opc
+                ));
+                root->t = Type::Float;
+            }
+            root->v = dst;
+            root->is_computable = false;
+        }
+    }
 }
 
 // UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
 void frontend::Analyzer::analyzeUnaryExp(UnaryExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
+    if(root->children.size() == 1 && root->children[0]->type == NodeType::PRIMARYEXP) {
+        GET_CHILD_PTR(pe, PrimaryExp, 0);
+        analyzePrimaryExp(pe, buffer);
+        root->is_computable = pe->is_computable;
+        root->v = pe->v;
+        root->t = pe->t;
+    }
+    else if(root->children.size() >= 3 && root->children[0]->type == NodeType::TERMINAL /* Ident */) {
+        // 函数调用
+        GET_CHILD_PTR(ident, Term, 0);
+        std::string func = ident->token.value;
+        std::vector<ir::Operand> params;
+        std::vector<ir::Operand> types;
+        size_t idx = 2;
+        if(root->children.size() > 3 && root->children[2]->type == NodeType::FUNCRPARAMS) {
+            GET_CHILD_PTR(rps, FuncRParams, 2);
+            analyzeFuncRParams(rps, buffer, params, types);
+            idx = 3;
+        }
+        // 调用指令
+        Type retT = symbol_table.functions[func]->returnType;
+        std::string dst = getTmpName();
+        buffer.push_back(new ir::CallInst(Operand(func, Type::null), params, Operand(dst, retT)));
+        root->is_computable = false;
+        root->v = dst;
+        root->t = retT;
+    }
+    else {
+        // 一元运算符
+        GET_CHILD_PTR(uop, UnaryOp, 0);
+        GET_CHILD_PTR(ue, UnaryExp, 1);
+        analyzeUnaryExp(ue, buffer);
+        // 处理 + - !
+        if(uop->op == TokenType::PLUS) {
+            root->is_computable = ue->is_computable;
+            root->v = ue->v;
+            root->t = ue->t;
+        } else if(uop->op == TokenType::MINU) {
+            if(ue->is_computable) {
+                if(ue->t == Type::Int) {
+                    int r = -std::stoi(ue->v);
+                    root->v = std::to_string(r);
+                    root->t = Type::IntLiteral;
+                    root->is_computable = true;
+                } else {
+                    double r = -std::stod(ue->v);
+                    root->v = std::to_string(r);
+                    root->t = Type::FloatLiteral;
+                    root->is_computable = true;
+                }
+            } else {
+                // 生成 0 - x
+                std::string dst = getTmpName();
+                if(ue->t == Type::Int) {
+                    buffer.push_back(new Instruction(
+                        Operand("0", Type::IntLiteral), Operand(ue->v, Type::Int), Operand(dst, Type::Int), Operator::sub
+                    ));
+                    root->t = Type::Int;
+                } else {
+                    buffer.push_back(new Instruction(
+                        Operand("0", Type::FloatLiteral), Operand(ue->v, Type::Float), Operand(dst, Type::Float), Operator::fsub
+                    ));
+                    root->t = Type::Float;
+                }
+                root->v = dst;
+                root->is_computable = false;
+            }
+        } else if(uop->op == TokenType::NOT) {
+            std::string dst = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(ue->v, ue->t), Operand(), Operand(dst, ue->t), Operator::_not
+            ));
+            root->v = dst;
+            root->t = ue->t;
+            root->is_computable = false;
+        }
+    }
 }
 
 // PrimaryExp -> '(' Exp ')' | LVal | Number
 void frontend::Analyzer::analyzePrimaryExp(PrimaryExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    if(MATCH_CHILD_TYPE(TERMINAL, 0)) {
+        // '(' Exp ')'
+        GET_CHILD_PTR(exp, Exp, 1);
+        analyzeExp(exp, buffer);
+        COPY_EXP_NODE(exp, root);
+    }
+    else if(MATCH_CHILD_TYPE(LVAL, 0)) {
+        // LVal
+        GET_CHILD_PTR(lval, LVal, 0);
+        analyzeLVal(lval, buffer);
+        COPY_EXP_NODE(lval, root);
+    }
+    else if(MATCH_CHILD_TYPE(NUMBER, 0)) {
+        // Number
+        GET_CHILD_PTR(number, Number, 0);
+        analyzeNumber(number, buffer);
+        COPY_EXP_NODE(number, root);
+    }
+    else {
+        assert(0 && "PrimaryExp error: expected Exp, LVal or Number");
+    }
 }
 
 // Number -> IntConst | floatConst
@@ -642,7 +1069,9 @@ void frontend::Analyzer::analyzeNumber(Number* root, vector<ir::Instruction*>& b
 
 // UnaryOp -> '+' | '-' | '!'
 void frontend::Analyzer::analyzeUnaryOp(UnaryOp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // UnaryOp -> '+' | '-' | '!'
+    GET_CHILD_PTR(term, Term, 0);
+    root->op = term->token.type;
 }
 
 // FuncRParams -> Exp { ',' Exp }
@@ -665,22 +1094,179 @@ void frontend::Analyzer::analyzeCond(Cond* root, vector<ir::Instruction*>& buffe
 
 // LOrExp -> LAndExp [ '||' LOrExp ]
 void frontend::Analyzer::analyzeLOrExp(LOrExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // LOrExp -> LAndExp [ '||' LOrExp ]
+    // initial left operand
+    GET_CHILD_PTR(first, LAndExp, 0);
+    analyzeLAndExp(first, buffer);
+    root->is_computable = first->is_computable;
+    root->v = first->v;
+    root->t = first->t;
+    // optional '||' right operand
+    if(root->children.size() > 1) {
+        // '||'
+        GET_CHILD_PTR(next, LOrExp, 2);
+        analyzeLOrExp(next, buffer);
+        // constant folding
+        if(root->is_computable && next->is_computable) {
+            int l = std::stoi(root->v);
+            int r = std::stoi(next->v);
+            int res = (l || r);
+            root->v = std::to_string(res);
+            root->t = Type::IntLiteral;
+            root->is_computable = true;
+        } else {
+            // generate IR for logical or
+            std::string dst = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(root->v, Type::Int),
+                Operand(next->v, Type::Int),
+                Operand(dst, Type::Int),
+                Operator::_or
+            ));
+            root->v = dst;
+            root->t = Type::Int;
+            root->is_computable = false;
+        }
+    }
 }
 
 // LAndExp -> EqExp [ '&&' LAndExp ]
 void frontend::Analyzer::analyzeLAndExp(LAndExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // LAndExp -> EqExp [ '&&' LAndExp ]
+    GET_CHILD_PTR(first, EqExp, 0);
+    analyzeEqExp(first, buffer);
+    root->is_computable = first->is_computable;
+    root->v = first->v;
+    root->t = first->t;
+    if(root->children.size() > 1) {
+        // '&&'
+        GET_CHILD_PTR(next, LAndExp, 2);
+        analyzeLAndExp(next, buffer);
+        // constant folding
+        if(root->is_computable && next->is_computable) {
+            int l = std::stoi(root->v);
+            int r = std::stoi(next->v);
+            int res = (l && r);
+            root->v = std::to_string(res);
+            root->t = Type::IntLiteral;
+            root->is_computable = true;
+        } else {
+            // generate IR for logical and
+            std::string dst = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(root->v, Type::Int),
+                Operand(next->v, Type::Int),
+                Operand(dst, Type::Int),
+                Operator::_and
+            ));
+            root->v = dst;
+            root->t = Type::Int;
+            root->is_computable = false;
+        }
+    }
 }
 
 // EqExp -> RelExp { ('==' | '!=') RelExp }
 void frontend::Analyzer::analyzeEqExp(EqExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // EqExp -> RelExp { ('==' | '!=') RelExp }
+    // initial operand
+    GET_CHILD_PTR(first, RelExp, 0);
+    analyzeRelExp(first, buffer);
+    root->is_computable = first->is_computable;
+    root->v = first->v;
+    root->t = Type::Int;
+    // subsequent comparisons
+    for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
+        GET_CHILD_PTR(opTerm, Term, i);
+        std::string op = opTerm->token.value;
+        GET_CHILD_PTR(next, RelExp, i+1);
+        analyzeRelExp(next, buffer);
+        // constant folding
+        if(root->is_computable && next->is_computable) {
+            int l = std::stoi(root->v);
+            int r = std::stoi(next->v);
+            int res = 0;
+            if(op == "==") res = (l == r);
+            else res = (l != r);
+            root->v = std::to_string(res);
+            root->t = Type::IntLiteral;
+            root->is_computable = true;
+        } else {
+            // generate IR
+            std::string dst = getTmpName();
+            // select operator
+            Operator opc;
+            if(op == "==" ) opc = Operator::eq;
+            else opc = Operator::neq;
+            buffer.push_back(new Instruction(
+                Operand(first->v, first->t),
+                Operand(next->v, next->t),
+                Operand(dst, Type::Int),
+                opc
+            ));
+            root->v = dst;
+            root->t = Type::Int;
+            root->is_computable = false;
+        }
+    }
 }
 
 // RelExp -> AddExp { ('<' | '>' | '<=' | '>=') AddExp }
 void frontend::Analyzer::analyzeRelExp(RelExp* root, vector<ir::Instruction*>& buffer) {
-    TODO;
+    // RelExp -> AddExp { ('<' | '>' | '<=' | '>=') AddExp }
+    GET_CHILD_PTR(first, AddExp, 0);
+    analyzeAddExp(first, buffer);
+    root->is_computable = first->is_computable;
+    root->v = first->v;
+    root->t = Type::Int;
+    for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
+        GET_CHILD_PTR(opTerm, Term, i);
+        std::string op = opTerm->token.value;
+        GET_CHILD_PTR(next, AddExp, i+1);
+        analyzeAddExp(next, buffer);
+        // constant folding
+        if(root->is_computable && next->is_computable) {
+            if(first->t == Type::Int) {
+                int l = std::stoi(root->v);
+                int r = std::stoi(next->v);
+                int res = 0;
+                if(op == "<") res = (l < r);
+                else if(op == ">") res = (l > r);
+                else if(op == "<=") res = (l <= r);
+                else res = (l >= r);
+                root->v = std::to_string(res);
+            } else {
+                double l = std::stod(root->v);
+                double r = std::stod(next->v);
+                int res = 0;
+                if(op == "<") res = (l < r);
+                else if(op == ">") res = (l > r);
+                else if(op == "<=") res = (l <= r);
+                else res = (l >= r);
+                root->v = std::to_string(res);
+            }
+            root->t = Type::IntLiteral;
+            root->is_computable = true;
+        } else {
+            // generate IR
+            std::string dst = getTmpName();
+            Operator opc;
+            bool isFloat = (first->t == Type::Float || next->t == Type::Float);
+            if(op == "<") opc = isFloat ? Operator::flss : Operator::lss;
+            else if(op == ">") opc = isFloat ? Operator::fgtr : Operator::gtr;
+            else if(op == "<=") opc = isFloat ? Operator::fleq : Operator::leq;
+            else opc = isFloat ? Operator::fgeq : Operator::geq;
+            buffer.push_back(new Instruction(
+                Operand(first->v, first->t),
+                Operand(next->v, next->t),
+                Operand(dst, Type::Int),
+                opc
+            ));
+            root->v = dst;
+            root->t = Type::Int;
+            root->is_computable = false;
+        }
+    }
 }
 
 // ConstExp -> AddExp
