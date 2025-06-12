@@ -2,6 +2,7 @@
 
 #include<cassert>
 #include<iostream>
+#include<algorithm>
 
 using ir::Instruction;
 using ir::Function;
@@ -655,7 +656,7 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
     }
     if(MATCH_CHILD_TYPE(TERMINAL, 0)) {
         GET_CHILD_PTR(term, Term, 0);
-        // return statement
+        // return
         if(term->token.type == TokenType::RETURNTK) {
             if(root->children.size()>2 && root->children[1]->type==NodeType::EXP) {
                 GET_CHILD_PTR(exp, Exp, 1);
@@ -668,76 +669,92 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
             }
             return;
         }
-        // if statement
+        // if
         if(term->token.type == TokenType::IFTK){
             // if '(' Cond ')' Stmt [ 'else' Stmt ]
             GET_CHILD_PTR(cond, Cond, 2);
             analyzeCond(cond, buffer);
-            // invert cond for false jump
-            std::string notVar = getTmpName();
-            buffer.push_back(new Instruction(
-                Operand(cond->v, Type::Int), Operand(), Operand(notVar, Type::Int), Operator::_not
-            ));
-            // placeholder jump to else or end
             auto condJump = new Instruction(
-                Operand(notVar, Type::Int), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+                Operand(cond->v, cond->t), Operand(), Operand("2", Type::IntLiteral), Operator::_goto
             );
             buffer.push_back(condJump);
-            // then branch
+
+            vector<ir::Instruction*> thenBuffer, elseBuffer;
+            // then分支
             GET_CHILD_PTR(thenStmt, Stmt, 4);
-            analyzeStmt(thenStmt, buffer);
+            analyzeStmt(thenStmt, thenBuffer);
+
             if(root->children.size() > 5 && root->children[5]->type == NodeType::TERMINAL){
-                // has else
-                // skip goto after then
-                int skipPos = buffer.size();
-                auto skipJump = new Instruction(
-                    Operand("null", Type::null), Operand(), Operand("", Type::IntLiteral), Operator::_goto
-                );
-                buffer.push_back(skipJump);
-                // patch condJump to else branch
-                condJump->des = Operand(std::to_string(skipPos+1), Type::IntLiteral);
-                // else branch
+                // 有else
                 GET_CHILD_PTR(elseStmt, Stmt, 6);
-                analyzeStmt(elseStmt, buffer);
-                // patch skipJump to after else
-                skipJump->des = Operand(std::to_string(buffer.size()), Type::IntLiteral);
+                analyzeStmt(elseStmt, elseBuffer);
+
+                thenBuffer.push_back(new Instruction(
+                    Operand("null", Type::null), Operand(), Operand(std::to_string(elseBuffer.size() + 1), Type::IntLiteral), Operator::_goto
+                ));
+                buffer.push_back(new Instruction(
+                    Operand("null", Type::null), Operand(), Operand(std::to_string(thenBuffer.size() + 1), Type::IntLiteral), Operator::_goto
+                ));
+                buffer.insert(buffer.end(), thenBuffer.begin(), thenBuffer.end());
+                buffer.insert(buffer.end(), elseBuffer.begin(), elseBuffer.end());
+                buffer.push_back(new Instruction(
+                    Operand(), Operand(), Operand(), Operator::__unuse__ // 用于填充
+                ));
             } else {
-                // no else: patch condJump to after then
-                condJump->des = Operand(std::to_string(buffer.size()), Type::IntLiteral);
+                // 没有else
+                buffer.push_back(new Instruction(
+                    Operand("null", Type::null), Operand(), Operand(std::to_string(thenBuffer.size() + 1), Type::IntLiteral), Operator::_goto
+                ));
+                buffer.insert(buffer.end(), thenBuffer.begin(), thenBuffer.end());
+                buffer.push_back(new Instruction(
+                    Operand(), Operand(), Operand(), Operator::__unuse__
+                ));
             }
             return;
         }
-        // while statement
+        // while
         if(term->token.type == TokenType::WHILETK){
             // while '(' Cond ')' Stmt
-            // record loop start
             int loopStart = buffer.size();
+
             GET_CHILD_PTR(cond, Cond, 2);
             analyzeCond(cond, buffer);
-            // invert cond for exit
+            // 条件取反
             std::string notVar2 = getTmpName();
             buffer.push_back(new Instruction(
                 Operand(cond->v, Type::Int), Operand(), Operand(notVar2, Type::Int), Operator::_not
             ));
-            // placeholder exit jump
             auto exitJump = new Instruction(
                 Operand(notVar2, Type::Int), Operand(), Operand("", Type::IntLiteral), Operator::_goto
             );
             buffer.push_back(exitJump);
-            // body
+            int exitPos = (int)buffer.size() - 1; // 记录退出循环位置
+            // 循环体
             GET_CHILD_PTR(bodyStmt, Stmt, 4);
             analyzeStmt(bodyStmt, buffer);
-            // after body, jump back to loop start
-            buffer.push_back(new Instruction(
+            // 回跳到loopStart
+            auto backJump = new Instruction(
                 Operand("null", Type::null), Operand(), Operand(std::to_string(loopStart), Type::IntLiteral), Operator::_goto
-            ));
-            // patch continue jumps to loop start
-            for(auto inst: root->jump_bow){ inst->des = Operand(std::to_string(loopStart), Type::IntLiteral); }
-            // patch break jumps to after loop
+            );
+            buffer.push_back(backJump);
+            int backPos = (int)buffer.size() - 1;
+            backJump->des = Operand(std::to_string(loopStart - backPos), Type::IntLiteral);
+
+            // patch continue跳回loop start
+            for(auto inst: root->jump_bow){
+                auto it = std::find(buffer.begin(), buffer.end(), inst);
+                int idx = (int)std::distance(buffer.begin(), it);
+                inst->des = Operand(std::to_string(loopStart - idx), Type::IntLiteral);
+            }
+            // patch break跳到loop end
             int loopEnd = buffer.size();
-            for(auto inst: root->jump_eow){ inst->des = Operand(std::to_string(loopEnd), Type::IntLiteral); }
-            // patch exitJump
-            exitJump->des = Operand(std::to_string(loopEnd), Type::IntLiteral);
+            for(auto inst: root->jump_eow){
+                auto it = std::find(buffer.begin(), buffer.end(), inst);
+                int idx = (int)std::distance(buffer.begin(), it);
+                inst->des = Operand(std::to_string(loopEnd - idx), Type::IntLiteral);
+            }
+            // patch exitJump跳到loop end
+            exitJump->des = Operand(std::to_string(loopEnd - exitPos), Type::IntLiteral);
             return;
         }
         // break
@@ -1351,9 +1368,8 @@ void frontend::Analyzer::analyzeRelExp(RelExp* root, vector<ir::Instruction*>& b
     // RelExp -> AddExp { ('<' | '>' | '<=' | '>=') AddExp }
     GET_CHILD_PTR(first, AddExp, 0);
     analyzeAddExp(first, buffer);
-    root->is_computable = first->is_computable;
-    root->v = first->v;
-    root->t = Type::Int;
+    COPY_EXP_NODE(first, root);
+
     for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
         GET_CHILD_PTR(opTerm, Term, i);
         std::string op = opTerm->token.value;
@@ -1361,7 +1377,7 @@ void frontend::Analyzer::analyzeRelExp(RelExp* root, vector<ir::Instruction*>& b
         analyzeAddExp(next, buffer);
         // constant folding
         if(root->is_computable && next->is_computable) {
-            if(first->t == Type::Int) {
+            if(root->t == Type::Int && next->t == Type::Int) {
                 int l = std::stoi(root->v);
                 int r = std::stoi(next->v);
                 int res = 0;
@@ -1385,6 +1401,31 @@ void frontend::Analyzer::analyzeRelExp(RelExp* root, vector<ir::Instruction*>& b
         } else {
             // generate IR
             std::string dst = getTmpName();
+            Operand op1 = Operand(root->v, root->t);
+            Operand op2 = Operand(next->v, next->t);
+            if(op1.type == Type::IntLiteral || op1.type == Type::FloatLiteral) {
+                // 如果是立即数，先def一个临时变量
+                std::string tmp = getTmpName();
+                buffer.push_back(new Instruction(
+                    op1,
+                    Operand(),
+                    Operand(tmp, op1.type == Type::IntLiteral ? Type::Int : Type::Float),
+                    op1.type == Type::IntLiteral ? Operator::def : Operator::fdef
+                ));
+                op1 = Operand(tmp, op1.type == Type::IntLiteral ? Type::Int : Type::Float);
+            }
+            if(op2.type == Type::IntLiteral || op2.type == Type::FloatLiteral) {
+                // 如果是立即数，先def一个临时变量
+                std::string tmp = getTmpName();
+                buffer.push_back(new Instruction(
+                    op2,
+                    Operand(),
+                    Operand(tmp, op2.type == Type::IntLiteral ? Type::Int : Type::Float),
+                    op2.type == Type::IntLiteral ? Operator::def : Operator::fdef
+                ));
+                op2 = Operand(tmp, op2.type == Type::IntLiteral ? Type::Int : Type::Float);
+            }
+            
             Operator opc;
             bool isFloat = (first->t == Type::Float || next->t == Type::Float);
             if(op == "<") opc = isFloat ? Operator::flss : Operator::lss;
