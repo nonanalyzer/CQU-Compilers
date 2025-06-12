@@ -1,6 +1,7 @@
 #include"front/semantic.h"
 
 #include<cassert>
+#include<iostream>
 
 using ir::Instruction;
 using ir::Function;
@@ -452,7 +453,7 @@ void frontend::Analyzer::analyzeInitVal(InitVal* root, vector<ir::Instruction*>&
                     buffer.push_back(new Instruction(
                         Operand(exp->v, Type::Int), // op1: 整数
                         Operand(), // op2: 无
-                        tmp, // des: 临时整数变量
+                        tmp, // des: 临时整数
                         Operator::def
                     ));
                     buffer.push_back(new Instruction(
@@ -652,9 +653,9 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
             return;
         }
     }
-    // return statement
     if(MATCH_CHILD_TYPE(TERMINAL, 0)) {
         GET_CHILD_PTR(term, Term, 0);
+        // return statement
         if(term->token.type == TokenType::RETURNTK) {
             if(root->children.size()>2 && root->children[1]->type==NodeType::EXP) {
                 GET_CHILD_PTR(exp, Exp, 1);
@@ -667,16 +668,7 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
             }
             return;
         }
-    }
-    // block
-    if(MATCH_CHILD_TYPE(BLOCK,0)) {
-        GET_CHILD_PTR(block, Block, 0);
-        analyzeBlock(block, buffer);
-        return;
-    }
-    // if statement
-    if(MATCH_CHILD_TYPE(TERMINAL,0)){
-        GET_CHILD_PTR(term, Term, 0);
+        // if statement
         if(term->token.type == TokenType::IFTK){
             // if '(' Cond ')' Stmt [ 'else' Stmt ]
             GET_CHILD_PTR(cond, Cond, 2);
@@ -783,6 +775,12 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
             // no operation
             return;
         }
+    }
+    // block
+    if(MATCH_CHILD_TYPE(BLOCK,0)) {
+        GET_CHILD_PTR(block, Block, 0);
+        analyzeBlock(block, buffer);
+        return;
     }
     // expression statement: [Exp] ';'
     if(root->children.size()>0 && root->children[0]->type==NodeType::EXP){
@@ -907,9 +905,7 @@ void frontend::Analyzer::analyzeAddExp(AddExp* root, vector<ir::Instruction*>& b
     // 初始项
     GET_CHILD_PTR(first, MulExp, 0);
     analyzeMulExp(first, buffer);
-    root->is_computable = first->is_computable;
-    root->v = first->v;
-    root->t = first->t;
+    COPY_EXP_NODE(first, root);
     // 后续加减
     for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
         // 运算符
@@ -920,7 +916,7 @@ void frontend::Analyzer::analyzeAddExp(AddExp* root, vector<ir::Instruction*>& b
         analyzeMulExp(next, buffer);
         // 常量合并
         if(root->is_computable && next->is_computable) {
-            if(root->t == Type::Int) {
+            if(root->t == Type::Int && next->t == Type::Int) {
                 int l = std::stoi(root->v);
                 int r = std::stoi(next->v);
                 int res = (op == "+" ? l + r : l - r);
@@ -953,6 +949,7 @@ void frontend::Analyzer::analyzeAddExp(AddExp* root, vector<ir::Instruction*>& b
                         Operand(dst, Type::Int),
                         op == "+" ? Operator::add : Operator::sub
                     ));
+                    std::cout << "here" << std::endl;
                 }
             } else {
                 // 浮点加减
@@ -975,9 +972,7 @@ void frontend::Analyzer::analyzeMulExp(MulExp* root, vector<ir::Instruction*>& b
     // MulExp -> UnaryExp { ('*' | '/' | '%') UnaryExp }
     GET_CHILD_PTR(first, UnaryExp, 0);
     analyzeUnaryExp(first, buffer);
-    root->is_computable = first->is_computable;
-    root->v = first->v;
-    root->t = first->t;
+    COPY_EXP_NODE(first, root);
     for(size_t i = 1; i + 1 < root->children.size(); i += 2) {
         GET_CHILD_PTR(opTerm, Term, i);
         std::string op = opTerm->token.value;
@@ -1061,13 +1056,10 @@ void frontend::Analyzer::analyzeMulExp(MulExp* root, vector<ir::Instruction*>& b
 
 // UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
 void frontend::Analyzer::analyzeUnaryExp(UnaryExp* root, vector<ir::Instruction*>& buffer) {
-    // UnaryExp -> PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
-    if(root->children.size() == 1 && root->children[0]->type == NodeType::PRIMARYEXP) {
+    if (root->children.size() == 1 && MATCH_CHILD_TYPE(PRIMARYEXP, 0)) {
         GET_CHILD_PTR(pe, PrimaryExp, 0);
         analyzePrimaryExp(pe, buffer);
-        root->is_computable = pe->is_computable;
-        root->v = pe->v;
-        root->t = pe->t;
+        COPY_EXP_NODE(pe, root);
     }
     else if(root->children.size() >= 3 && root->children[0]->type == NodeType::TERMINAL /* Ident */) {
         // 函数调用
@@ -1092,37 +1084,46 @@ void frontend::Analyzer::analyzeUnaryExp(UnaryExp* root, vector<ir::Instruction*
     else {
         // 一元运算符
         GET_CHILD_PTR(uop, UnaryOp, 0);
+        analyzeUnaryOp(uop, buffer);
         GET_CHILD_PTR(ue, UnaryExp, 1);
         analyzeUnaryExp(ue, buffer);
         // 处理 + - !
         if(uop->op == TokenType::PLUS) {
-            root->is_computable = ue->is_computable;
-            root->v = ue->v;
-            root->t = ue->t;
+            COPY_EXP_NODE(ue, root);
         } else if(uop->op == TokenType::MINU) {
             if(ue->is_computable) {
-                if(ue->t == Type::Int) {
+                if(ue->t == Type::IntLiteral) {
                     int r = -std::stoi(ue->v);
                     root->v = std::to_string(r);
                     root->t = Type::IntLiteral;
                     root->is_computable = true;
-                } else {
+                } else if(ue->t == Type::FloatLiteral) {
                     double r = -std::stod(ue->v);
                     root->v = std::to_string(r);
                     root->t = Type::FloatLiteral;
                     root->is_computable = true;
+                } else {
+                    assert(0 && "UnaryExp error1: expected IntLiteral or FloatLiteral");
                 }
             } else {
                 // 生成 0 - x
                 std::string dst = getTmpName();
                 if(ue->t == Type::Int) {
+                    Operand zero = Operand(getTmpName(), Type::Int);
                     buffer.push_back(new Instruction(
-                        Operand("0", Type::IntLiteral), Operand(ue->v, Type::Int), Operand(dst, Type::Int), Operator::sub
+                        Operand("0", Type::IntLiteral), Operand(), zero, Operator::def
+                    ));
+                    buffer.push_back(new Instruction(
+                        zero, Operand(ue->v, Type::Int), Operand(dst, Type::Int), Operator::sub
                     ));
                     root->t = Type::Int;
                 } else {
+                    Operand zero = Operand(getTmpName(), Type::Float);
                     buffer.push_back(new Instruction(
-                        Operand("0", Type::FloatLiteral), Operand(ue->v, Type::Float), Operand(dst, Type::Float), Operator::fsub
+                        Operand("0.0", Type::FloatLiteral), Operand(), zero, Operator::fdef
+                    ));
+                    buffer.push_back(new Instruction(
+                        zero, Operand(ue->v, Type::Float), Operand(dst, Type::Float), Operator::fsub
                     ));
                     root->t = Type::Float;
                 }
@@ -1138,6 +1139,11 @@ void frontend::Analyzer::analyzeUnaryExp(UnaryExp* root, vector<ir::Instruction*
             root->t = ue->t;
             root->is_computable = false;
         }
+        else {
+            assert(0 && "UnaryExp error2: expected PrimaryExp, function call or UnaryOp UnaryExp");
+        }
+        
+        std::cout << "Here " << toString(root->t) << " " << root->v << std::endl;
     }
 }
 
@@ -1171,10 +1177,11 @@ void frontend::Analyzer::analyzePrimaryExp(PrimaryExp* root, vector<ir::Instruct
 void frontend::Analyzer::analyzeNumber(Number* root, vector<ir::Instruction*>& buffer) {
     GET_CHILD_PTR(term, Term, 0);
     if(term->token.type == TokenType::INTLTR){
+        root->is_computable = true;
         root->t = Type::IntLiteral;
         root->v = term->token.value;
         // 对二、八、十六进制数字进行转换
-        if(root->v.size() > 2 && root->v[0] == '0'){
+        if(root->v.size() >= 2 && root->v[0] == '0'){
             if(root->v[1] == 'x' || root->v[1] == 'X'){
                 // 十六进制
                 root->v = std::to_string(std::stoi(root->v, nullptr, 16));
@@ -1190,6 +1197,7 @@ void frontend::Analyzer::analyzeNumber(Number* root, vector<ir::Instruction*>& b
         }
     }
     else if(term->token.type == TokenType::FLOATLTR){
+        root->is_computable = true;
         root->t = Type::FloatLiteral;
         root->v = term->token.value;
     }
@@ -1229,9 +1237,7 @@ void frontend::Analyzer::analyzeLOrExp(LOrExp* root, vector<ir::Instruction*>& b
     // initial left operand
     GET_CHILD_PTR(first, LAndExp, 0);
     analyzeLAndExp(first, buffer);
-    root->is_computable = first->is_computable;
-    root->v = first->v;
-    root->t = first->t;
+    COPY_EXP_NODE(first, root);
     // optional '||' right operand
     if(root->children.size() > 1) {
         // '||'
@@ -1266,9 +1272,7 @@ void frontend::Analyzer::analyzeLAndExp(LAndExp* root, vector<ir::Instruction*>&
     // LAndExp -> EqExp [ '&&' LAndExp ]
     GET_CHILD_PTR(first, EqExp, 0);
     analyzeEqExp(first, buffer);
-    root->is_computable = first->is_computable;
-    root->v = first->v;
-    root->t = first->t;
+    COPY_EXP_NODE(first, root);
     if(root->children.size() > 1) {
         // '&&'
         GET_CHILD_PTR(next, LAndExp, 2);
