@@ -253,6 +253,7 @@ struct Exp: AstNode{
     bool is_computable = false;
     string v;
     Type t;
+    int value;
 
     /**
      * @brief constructor
@@ -264,6 +265,7 @@ struct Cond: AstNode{
     bool is_computable = false;
     string v;
     Type t;
+    int value;
 
     /**
      * @brief constructor
@@ -276,6 +278,7 @@ struct LVal: AstNode{
     string v;
     Type t;
     int i;  // array index, legal if t is IntPtr or FloatPtr
+    int value;
 
     /**
      * @brief constructor
@@ -287,6 +290,7 @@ struct Number: AstNode{
     bool is_computable = true;
     string v;
     Type t;
+    int value;
 
     /**
      * @brief constructor
@@ -298,6 +302,7 @@ struct PrimaryExp: AstNode{
     bool is_computable = false;
     string v;
     Type t;
+    int value;
     
     /**
      * @brief constructor
@@ -309,6 +314,7 @@ struct UnaryExp: AstNode{
     bool is_computable = false;
     string v;
     Type t;
+    int value;
 
     /**
      * @brief constructor
@@ -336,6 +342,7 @@ struct MulExp: AstNode{
     bool is_computable = false;
     string v;
     Type t;
+    int value;
 
     /**
      * @brief constructor
@@ -347,6 +354,7 @@ struct AddExp: AstNode{
     bool is_computable = false;
     string v;
     Type t;
+    int value;
 
     /**
      * @brief constructor
@@ -358,6 +366,7 @@ struct RelExp: AstNode{
     bool is_computable = false;
     string v;
     Type t = Type::Int;
+    int value;
 
     /**
      * @brief constructor
@@ -369,6 +378,7 @@ struct EqExp: AstNode{
     bool is_computable = false;
     string v;
     Type t = Type::Int;
+    int value;
 
     /**
      * @brief constructor
@@ -380,6 +390,7 @@ struct LAndExp: AstNode{
     bool is_computable = false;
     string v;
     Type t = Type::Int;
+    int value;
 
     /**
      * @brief constructor
@@ -391,6 +402,7 @@ struct LOrExp: AstNode{
     bool is_computable = false;
     string v;
     Type t = Type::Int;
+    int value;
 
     /**
      * @brief constructor
@@ -402,6 +414,7 @@ struct ConstExp: AstNode{
     bool is_computable = true;
     string v;
     Type t ;
+    int value;
 
     /**
      * @brief constructor
