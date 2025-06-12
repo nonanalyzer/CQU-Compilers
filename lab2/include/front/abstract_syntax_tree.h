@@ -111,6 +111,10 @@ struct CompUnit: AstNode {
 };
 
 struct Decl: AstNode{
+    Type t;
+    vector<string> n;
+    vector<int> size;
+    
     /**
      * @brief constructor
      */
@@ -129,6 +133,8 @@ struct FuncDef: AstNode{
 
 struct ConstDecl: AstNode {
     Type t;
+    vector<string> n;
+    vector<int> size;
 
     /**
      * @brief constructor
@@ -146,7 +152,8 @@ struct BType: AstNode {
 };
 
 struct ConstDef: AstNode{
-    std::string arr_name;
+    std::string n;
+    int size = 0;
 
     /**
      * @brief constructor
@@ -166,6 +173,8 @@ struct ConstInitVal: AstNode{
 
 struct VarDecl: AstNode{
     Type t;
+    vector<string> n;
+    vector<int> size;
 
     /**
      * @brief constructor
@@ -174,7 +183,8 @@ struct VarDecl: AstNode{
 };
 
 struct VarDef: AstNode{
-    std::string arr_name;
+    std::string n;
+    int size = 0;
 
     /**
      * @brief constructor

@@ -45,8 +45,6 @@ void frontend::SymbolTable::exit_scope() {
 }
 
 string frontend::SymbolTable::get_scoped_name(string id) const {
-    // 加后缀
-    if(scope_stack.empty()) return id; // 全局作用域
     return id + "_" + scope_stack.back().name;
 }
 
@@ -111,6 +109,12 @@ void frontend::Analyzer::analyzeCompUnit(CompUnit* root, ir::Program& buffer){
     if(MATCH_CHILD_TYPE(DECL, 0)){
         GET_CHILD_PTR(decl, Decl, 0);
         analyzeDecl(decl, buffer.functions.back().InstVec);
+        // 记录全局变量
+        for(size_t i = 0; i < decl->n.size(); ++i){
+            auto type = decl->t;
+            if(decl->size[i] > 0) type = (type == Type::Int) ? Type::IntPtr : Type::FloatPtr; // 如果是数组，类型为指针
+            buffer.globalVal.push_back(ir::GlobalVal(Operand(decl->n[i], type), decl->size[i]));
+        }
     }
     else if(MATCH_CHILD_TYPE(FUNCDEF, 0)){
         GET_CHILD_PTR(funcDef, FuncDef, 0);
@@ -133,10 +137,18 @@ void frontend::Analyzer::analyzeDecl(Decl* root, vector<ir::Instruction*>& buffe
     if(MATCH_CHILD_TYPE(CONSTDECL, 0)){
         GET_CHILD_PTR(constDecl, ConstDecl, 0);
         analyzeConstDecl(constDecl, buffer);
+        // 记录常量名和大小
+        root->t = constDecl->t;
+        root->n = constDecl->n;
+        root->size = constDecl->size;
     }
     else if(MATCH_CHILD_TYPE(VARDECL, 0)){
         GET_CHILD_PTR(varDecl, VarDecl, 0);
         analyzeVarDecl(varDecl, buffer);
+        // 记录变量名和大小
+        root->t = varDecl->t;
+        root->n = varDecl->n;
+        root->size = varDecl->size;
     }
     else{
         assert(0 && "analyzeDecl error: expected ConstDecl or VarDecl");
@@ -152,6 +164,9 @@ void frontend::Analyzer::analyzeConstDecl(ConstDecl* root, vector<ir::Instructio
     for(size_t i = 2; i < root->children.size() - 1; i += 2){ // 跳过逗号
         GET_CHILD_PTR(constDef, ConstDef, i);
         analyzeConstDef(constDef, buffer, btype->t);
+        // 记录变量名和大小
+        root->n.push_back(constDef->n);
+        root->size.push_back(constDef->size);
     }
 }
 
@@ -164,6 +179,9 @@ void frontend::Analyzer::analyzeVarDecl(VarDecl* root, vector<ir::Instruction*>&
     for(size_t i = 1; i < root->children.size() - 1; i += 2){ // 跳过逗号
         GET_CHILD_PTR(varDef, VarDef, i);
         analyzeVarDef(varDef, buffer, btype->t);
+        // 记录变量名和大小
+        root->n.push_back(varDef->n);
+        root->size.push_back(varDef->size);
     }
 }
 
@@ -171,7 +189,7 @@ void frontend::Analyzer::analyzeVarDecl(VarDecl* root, vector<ir::Instruction*>&
 void frontend::Analyzer::analyzeConstDef(ConstDef* root, vector<ir::Instruction*>& buffer, ir::Type t) {
     // 变量名ident
     GET_CHILD_PTR(ident, Term, 0);
-    root->arr_name = symbol_table.get_scoped_name(ident->token.value);
+    root->n = symbol_table.get_scoped_name(ident->token.value);
 
     vector<int> dims;
     int size = 0; // 如果非数组，size置0
@@ -189,17 +207,18 @@ void frontend::Analyzer::analyzeConstDef(ConstDef* root, vector<ir::Instruction*
             else break;
         }
     }
+    root->size = size;
 
     if(size == 0){
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->arr_name, t), dims);
+        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t), dims);
     }
     else{
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->arr_name, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
+        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
         // 分配数组空间
         buffer.push_back(new Instruction(
             Operand(std::to_string(size), Type::IntLiteral), // op1: 数组大小
             Operand(), // op2: 无
-            Operand(root->arr_name, t == Type::Int ? Type::IntPtr : Type::FloatPtr), // dst
+            Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), // dst
             Operator::alloc
         ));
     }
@@ -261,9 +280,9 @@ void frontend::Analyzer::analyzeConstInitVal(ConstInitVal* root, vector<ir::Inst
                 else if (root->t == Type::Float) {
                     auto tmp = Operand(getTmpName(), Type::Int);
                     buffer.push_back(new Instruction(
-                        Operand(constExp->v, Type::Int), // op1: 整数
+                        Operand(constExp->v, Type::Int), // op1: 立即数或变量
                         Operand(), // op2: 无
-                        tmp, // des: 临时整数变量
+                        tmp, // des: 临时整数变量名
                         Operator::def
                     ));
                     buffer.push_back(new Instruction(
@@ -279,9 +298,9 @@ void frontend::Analyzer::analyzeConstInitVal(ConstInitVal* root, vector<ir::Inst
             }
             else{
                 buffer.push_back(new Instruction(
-                    Operand(name, root->t), // op1: 变量名
+                    Operand(constExp->v, constExp->t), // op1: 常量值
                     Operand(), // op2: 无
-                    Operand(constExp->v, constExp->t), // des: 常量值
+                    Operand(name, root->t), // des: 变量名
                     root->t == Type::Int ? Operator::def : Operator::fdef
                 ));
             }
@@ -296,6 +315,8 @@ void frontend::Analyzer::analyzeConstInitVal(ConstInitVal* root, vector<ir::Inst
         while (idx < root->children.size() - 1) { // 跳过 '}'
             if (MATCH_CHILD_TYPE(CONSTINITVAL, idx)) {
                 GET_CHILD_PTR(subInit, ConstInitVal, idx);
+                subInit->v = root->v;
+                subInit->t = root->t; // 传递数组原名(下一层会重新加后缀)和类型
                 analyzeConstInitVal(subInit, buffer, size, offset + elem, dims);
                 elem++;
             }
@@ -336,7 +357,7 @@ void frontend::Analyzer::analyzeBType(BType* root) {
 void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& buffer, ir::Type t) {
     // 变量名ident
     GET_CHILD_PTR(ident, Term, 0);
-    root->arr_name = symbol_table.get_scoped_name(ident->token.value);
+    root->n = symbol_table.get_scoped_name(ident->token.value);
 
     vector<int> dims;
     int size = 0; // 如果非数组，size置0
@@ -354,21 +375,22 @@ void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& b
             else break;
         }
     }
+    root->size = size;
 
     if(size == 0){
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->arr_name, t), dims);
+        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t), dims);
     }
     else{
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->arr_name, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
+        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
         // 分配数组空间
         buffer.push_back(new Instruction(
             Operand(std::to_string(size), Type::IntLiteral), // op1: 数组大小
             Operand(), // op2: 无
-            Operand(root->arr_name, t == Type::Int ? Type::IntPtr : Type::FloatPtr), // dst
+            Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), // dst
             Operator::alloc
         ));
     }
-    if(root->children.size() > 1){
+    if(root->children.back()->type == NodeType::INITVAL){
         GET_CHILD_PTR(initVal, InitVal, root->children.size() - 1);
         initVal->v = ident->token.value; // 变量名
         if(t == Type::Int){
@@ -446,9 +468,9 @@ void frontend::Analyzer::analyzeInitVal(InitVal* root, vector<ir::Instruction*>&
             }
             else{
                 buffer.push_back(new Instruction(
-                    Operand(name, root->t), // op1: 变量名
+                    Operand(exp->v, exp->t), // op1: 常量值
                     Operand(), // op2: 无
-                    Operand(exp->v, exp->t), // des: 常量值
+                    Operand(name, root->t), // des: 变量名
                     root->t == Type::Int ? Operator::def : Operator::fdef
                 ));
             }
@@ -463,6 +485,8 @@ void frontend::Analyzer::analyzeInitVal(InitVal* root, vector<ir::Instruction*>&
         while (idx < root->children.size() - 1) { // 跳过 '}'
             if (MATCH_CHILD_TYPE(INITVAL, idx)) {
                 GET_CHILD_PTR(subInit, InitVal, idx);
+                subInit->v = root->v;
+                subInit->t = root->t; // 传递数组原名(下一层会重新加后缀)和类型
                 analyzeInitVal(subInit, buffer, size, offset + elem, dims);
                 elem++;
             }
@@ -580,13 +604,51 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
         GET_CHILD_PTR(lval, LVal, 0);
         GET_CHILD_PTR(assignT, Term, 1);
         if(assignT->token.type == TokenType::ASSIGN) {
-            analyzeLVal(lval, buffer);
+            string offset("need_offset");
+            analyzeLVal(lval, buffer, offset);
             GET_CHILD_PTR(exp, Exp, 2);
             analyzeExp(exp, buffer);
-            Operator opc = (lval->t == Type::Float) ? Operator::fmov : Operator::mov;
-            buffer.push_back(new Instruction(
-                Operand(lval->v, lval->t), Operand(), Operand(exp->v, exp->t), opc
-            ));
+            if(lval->t == Type::Int || lval->t == Type::Float){
+                // 普通变量
+                if(lval->t == Type::Int && exp->t == Type::Float) {
+                    // 整数赋值浮点数，需转换
+                    auto tmp = Operand(getTmpName(), Type::Float);
+                    buffer.push_back(new Instruction(
+                        Operand(exp->v, Type::Float), Operand(), tmp, Operator::fdef
+                    ));
+                    buffer.push_back(new Instruction(
+                        tmp, Operand(), Operand(lval->v, Type::Int), Operator::cvt_f2i
+                    ));
+                }
+                else if(lval->t == Type::Float && exp->t == Type::Int) {
+                    // 浮点数赋值整数，需转换
+                    auto tmp = Operand(getTmpName(), Type::Int);
+                    buffer.push_back(new Instruction(
+                        Operand(exp->v, Type::Int), Operand(), tmp, Operator::def
+                    ));
+                    buffer.push_back(new Instruction(
+                        tmp, Operand(), Operand(lval->v, Type::Float), Operator::cvt_i2f
+                    ));
+                }
+                else {
+                    // 类型匹配或直接赋值
+                    buffer.push_back(new Instruction(
+                        Operand(exp->v, exp->t), Operand(), Operand(lval->v, lval->t), Operator::def
+                    ));
+                }
+            }
+            else if(lval->t == Type::IntPtr || lval->t == Type::FloatPtr){
+                // 数组元素
+                buffer.push_back(new Instruction(
+                    Operand(lval->v, lval->t),
+                    Operand(offset, Type::Int),
+                    Operand(exp->v, exp->t),
+                    Operator::store
+                ));
+            }
+            else {
+                assert(0 && "LVal type error");
+            }
             return;
         }
     }
@@ -733,34 +795,102 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
 }
 
 // LVal -> Ident {'[' Exp ']'
-void frontend::Analyzer::analyzeLVal(LVal* root, vector<ir::Instruction*>& buffer) {
+void frontend::Analyzer::analyzeLVal(LVal* root, vector<ir::Instruction*>& buffer, string& offset) {
     // LVal -> Ident {'[' Exp ']'}
     GET_CHILD_PTR(ident, Term, 0);
-    std::string name = ident->token.value;
-    ir::Operand base = symbol_table.get_operand(name);
-    if (root->children.size() == 1) {
+    auto name = ident->token.value;
+    auto ste  = symbol_table.get_ste(name);
+    auto base = symbol_table.get_operand(name);
+    const auto& dims = ste.dimension;
+
+    // 普通变量
+    if (root->children.size() == 1){
         // simple variable
         root->is_computable = false;
         root->v = base.name;
         root->t = base.type;
-    } else {
-        // array element access chain
-        ir::Operand cur = base;
-        for (size_t i = 1; i + 1 < root->children.size(); i += 2) {
-            GET_CHILD_PTR(exp, Exp, i+1);
-            analyzeExp(exp, buffer);
-            std::string tmp = getTmpName();
+        return;
+    }
+
+    // 数组变量
+    // 计算线性偏移
+    string offsetVar;
+    for(size_t k = 0, index = 2; k < dims.size(); ++k, index += 3){
+        GET_CHILD_PTR(exp, Exp, index);
+        analyzeExp(exp, buffer);
+        // 计算本维度的 stride
+        int stride = 1;
+        for(size_t j = dims.size() - 1; j > k; --j) stride *= dims[j];
+        // idx_k * stride
+        string part = getTmpName();
+        if(stride == 1){
             buffer.push_back(new Instruction(
-                Operand(cur.name, cur.type),
                 Operand(exp->v, exp->t),
-                Operand(tmp, cur.type == Type::IntPtr ? Type::Int : Type::Float),
-                Operator::load
+                Operand(),
+                Operand(part, Type::Int),
+                Operator::def
             ));
-            cur = Operand(tmp, cur.type == Type::IntPtr ? Type::Int : Type::Float);
         }
+        else{
+            Operand t1, t2;
+            if(exp->t == Type::IntLiteral){
+                t1 = Operand(getTmpName(), Type::Int);
+                buffer.push_back(new Instruction(
+                    Operand(exp->v, Type::IntLiteral),
+                    Operand(),
+                    t1,
+                    Operator::def
+                ));
+            }
+            else if(exp->t == Type::Int) t1 = Operand(exp->v, Type::Int);
+            else assert(0 && "LVal error: Exp type must be Int or IntLiteral");
+            t2 = Operand(getTmpName(), Type::Int);
+            buffer.push_back(new Instruction(
+                Operand(std::to_string(stride), Type::IntLiteral),
+                Operand(),
+                t2,
+                Operator::def
+            ));                          
+            buffer.push_back(new Instruction(
+                t1,
+                t2,
+                Operand(part, Type::Int),
+                Operator::mul
+            ));
+        }
+        // 累加到 offsetVar
+        if(k == 0) offsetVar = part;
+        else{
+            string sum = getTmpName();
+            buffer.push_back(new Instruction(
+                Operand(offsetVar, Type::Int),
+                Operand(part, Type::Int),
+                Operand(sum, Type::Int),
+                Operator::add
+            ));
+            offsetVar = sum;
+        }
+    }
+    if(offset == "need_offset"){
+        // Stmt -> LVal '=' Exp ';'
+        root->v = base.name;
         root->is_computable = false;
-        root->v = cur.name;
-        root->t = cur.type;
+        root->t = base.type;
+        offset = offsetVar;
+    }
+    else{
+        // PrimaryExp -> LVal
+        // 读取：load dst, base, offset
+        string dst = getTmpName();
+        buffer.push_back(new Instruction(
+            Operand(base.name, base.type),
+            Operand(offsetVar, Type::Int),
+            Operand(dst, base.type == Type::IntPtr ? Type::Int : Type::Float),
+            Operator::load
+        ));
+        root->v = dst;
+        root->t = base.type == Type::IntPtr ? Type::Int : Type::Float;
+        root->is_computable = false;
     }
 }
 
@@ -1022,7 +1152,8 @@ void frontend::Analyzer::analyzePrimaryExp(PrimaryExp* root, vector<ir::Instruct
     else if(MATCH_CHILD_TYPE(LVAL, 0)) {
         // LVal
         GET_CHILD_PTR(lval, LVal, 0);
-        analyzeLVal(lval, buffer);
+        string tmp;
+        analyzeLVal(lval, buffer, tmp);
         COPY_EXP_NODE(lval, root);
     }
     else if(MATCH_CHILD_TYPE(NUMBER, 0)) {

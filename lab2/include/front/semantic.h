@@ -132,7 +132,7 @@ struct Analyzer {
     void analyzeVarDef(VarDef*, vector<ir::Instruction*>&, ir::Type);
     void analyzeConstExp(ConstExp*, vector<ir::Instruction*>&);
     void analyzeInitVal(InitVal*, vector<ir::Instruction*>&, int, int, vector<int>&);
-    void analyzeLVal(LVal*, vector<ir::Instruction*>&);
+    void analyzeLVal(LVal*, vector<ir::Instruction*>&, string&);
     void analyzeConstDecl(ConstDecl*, vector<ir::Instruction*>&);
     void analyzeConstDef(ConstDef*, vector<ir::Instruction*>&, ir::Type);
     void analyzeConstInitVal(ConstInitVal*, vector<ir::Instruction*>&, int, int, vector<int>&);
