@@ -55,9 +55,10 @@ string frontend::SymbolTable::get_scoped_name(string id) const {
 }
 
 Operand frontend::SymbolTable::get_operand(string id) const {
-    // 查找最近的作用域，返回对应的operand（name为重命名后的）
+    // id是原名, 对应的operand.name为重命名后的
     for(auto it = scope_stack.rbegin(); it != scope_stack.rend(); ++it){
-        auto found = it->table.find(id);
+        auto now_name = id + "_" + it->name; // 加上作用域名
+        auto found = it->table.find(now_name);
         if(found != it->table.end()){
             return found->second.operand;
         }
@@ -67,9 +68,10 @@ Operand frontend::SymbolTable::get_operand(string id) const {
 }
 
 frontend::STE frontend::SymbolTable::get_ste(string id) const {
-    // 查找最近的作用域，返回对应的STE
+    // 同上个函数
     for(auto it = scope_stack.rbegin(); it != scope_stack.rend(); ++it){
-        auto found = it->table.find(id);
+        auto now_name = id + "_" + it->name;
+        auto found = it->table.find(now_name);
         if(found != it->table.end()){
             return found->second;
         }
@@ -217,10 +219,10 @@ void frontend::Analyzer::analyzeConstDef(ConstDef* root, vector<ir::Instruction*
     root->size = size;
 
     if(size == 0){
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t), dims);
+        symbol_table.scope_stack.back().table[root->n] = STE(Operand(root->n, t), dims);
     }
     else{
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
+        symbol_table.scope_stack.back().table[root->n] = STE(Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
         // 分配数组空间
         buffer.push_back(new Instruction(
             Operand(std::to_string(size), Type::IntLiteral), // op1: 数组大小
@@ -390,10 +392,10 @@ void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& b
     root->size = size;
 
     if(size == 0){
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t), dims);
+        symbol_table.scope_stack.back().table[root->n] = STE(Operand(root->n, t), dims);
     }
     else{
-        symbol_table.scope_stack.back().table[ident->token.value] = STE(Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
+        symbol_table.scope_stack.back().table[root->n] = STE(Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), dims);
         // 分配数组空间
         buffer.push_back(new Instruction(
             Operand(std::to_string(size), Type::IntLiteral), // op1: 数组大小
@@ -416,6 +418,29 @@ void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& b
         }
         // 分析InitVal
         analyzeInitVal(initVal, buffer, size, 0, dims);
+    }
+    // 全局变量如果没显式初始化，也要补零
+    else if(symbol_table.scope_stack.size() == 1){
+        if(size == 0) {
+            // 普通变量
+            buffer.push_back(new Instruction(
+                Operand(root->n, t), // op1: 变量名
+                Operand(), // op2: 无
+                Operand("0", Type::IntLiteral), // des: 常量值
+                t == Type::Int ? Operator::def : Operator::fdef
+            ));
+        }
+        else {
+            // 数组，补零
+            for(int i = 0; i < size; ++i) {
+                buffer.push_back(new Instruction(
+                    Operand(root->n, t == Type::Int ? Type::IntPtr : Type::FloatPtr), // op1: 数组名
+                    Operand(std::to_string(i), Type::IntLiteral), // op2: 偏移
+                    Operand("0", Type::IntLiteral), // des: 常量值
+                    Operator::store
+                ));
+            }
+        }
     }
 }
 
@@ -574,11 +599,26 @@ void frontend::Analyzer::analyzeFuncFParam(FuncFParam* root, ir::Function& buffe
     GET_CHILD_PTR(btype, BType, 0);
     analyzeBType(btype);
     GET_CHILD_PTR(ident, Term, 1);
-    std::string name = ident->token.value;
+    std::string name = symbol_table.get_scoped_name(ident->token.value);
     auto type = btype->t;
-    if(root->children.size() > 2) type = type == Type::Int ? Type::IntPtr : Type::FloatPtr; // 数组
+    vector<int> dims = {};
+    if(root->children.size() > 2){
+        type = type == Type::Int ? Type::IntPtr : Type::FloatPtr; // 数组
+        dims.push_back(1);
+        for(int i = 5; i < root->children.size(); i += 3){
+            if(MATCH_CHILD_TYPE(EXP, i)){
+                GET_CHILD_PTR(exp, Exp, i);
+                analyzeExp(exp, buffer.InstVec);
+                assert(exp->is_computable && exp->value >= 0 && "Exp must be positive integer");
+                dims.push_back(exp->value);
+            }
+            else{
+                assert(0 && "FuncFParam error: expected Exp");
+            }
+        }
+    }
     buffer.ParameterList.push_back(Operand(name, type));
-    symbol_table.scope_stack.back().table[name] = STE(Operand(name, type), {});
+    symbol_table.scope_stack.back().table[name] = STE(Operand(name, type), dims);
 }
 
 // Block -> '{' { BlockItem } '}'
@@ -1081,7 +1121,7 @@ void frontend::Analyzer::analyzeUnaryExp(UnaryExp* root, vector<ir::Instruction*
             } else {
                 Operand zero = Operand(getTmpName(), Type::Float);
                 buffer.push_back(new Instruction(
-                    Operand("0.0", Type::FloatLiteral), Operand(), zero, Operator::fdef
+                    Operand("0", Type::FloatLiteral), Operand(), zero, Operator::fdef
                 ));
                 buffer.push_back(new Instruction(
                     zero, Operand(ue->v, Type::Float), Operand(dst, Type::Float), Operator::fsub
@@ -1226,7 +1266,7 @@ void frontend::Analyzer::analyzeLOrExp(LOrExp* root, vector<ir::Instruction*>& b
         analyzeLOrExp(rhs, buffer);
         // rhs 的值覆盖 result
         buffer.push_back(new Instruction(
-            Operand(rhs->v, Type::Int), Operand(), Operand(result, Type::Int), Operator::def
+            Operand(rhs->v, Type::Int), Operand(), Operand(result, Type::Int), Operator::mov
         ));
 
         // 3. patch shortJump 跳过 rhs 部分到 end
@@ -1271,7 +1311,7 @@ void frontend::Analyzer::analyzeLAndExp(LAndExp* root, vector<ir::Instruction*>&
         analyzeLAndExp(rhs, buffer);
         // 将 rhs 的值覆盖 result
         buffer.push_back(new Instruction(
-            Operand(rhs->v, Type::Int), Operand(), Operand(result, Type::Int), Operator::def
+            Operand(rhs->v, Type::Int), Operand(), Operand(result, Type::Int), Operator::mov
         ));
 
         // 3. patch shortJump 跳到 end
