@@ -685,7 +685,7 @@ void frontend::Analyzer::analyzeStmt(Stmt* root, vector<ir::Instruction*>& buffe
             GET_CHILD_PTR(cond, Cond, 2);
             analyzeCond(cond, buffer);
             auto condJump = new Instruction(
-                Operand(cond->v, cond->t), Operand(), Operand("2", Type::IntLiteral), Operator::_goto
+                Operand(cond->v, Type::Int), Operand(), Operand("2", Type::IntLiteral), Operator::_goto
             );
             buffer.push_back(condJump);
 
@@ -1201,22 +1201,40 @@ void frontend::Analyzer::analyzeCond(Cond* root, vector<ir::Instruction*>& buffe
 
 // LOrExp -> LAndExp [ '||' LOrExp ]
 void frontend::Analyzer::analyzeLOrExp(LOrExp* root, vector<ir::Instruction*>& buffer) {
-    GET_CHILD_PTR(first, LAndExp, 0);
-    analyzeLAndExp(first, buffer);
-    COPY_EXP_NODE(first, root);
+    // 1. eval 第一项
+    GET_CHILD_PTR(lhs, LAndExp, 0);
+    analyzeLAndExp(lhs, buffer);
+    COPY_EXP_NODE(lhs, root);
 
-    if(root->children.size() > 1) {
-        GET_CHILD_PTR(next, LOrExp, 2);
-        analyzeLOrExp(next, buffer);
-
-        std::string dst = getTmpName();
+    // 如果有 '|| next'
+    if (root->children.size() > 1) {
+        // 为整个 or 的结果准备一个临时
+        std::string result = getTmpName();
+        // 先把结果初始化为 1（假设 lhs 为 true 时短路，结果就为 1）
         buffer.push_back(new Instruction(
-            Operand(root->v, root->t),
-            Operand(next->v, next->t),
-            Operand(dst, Type::Int),
-            Operator::_or
+            Operand("1", Type::IntLiteral), Operand(), Operand(result, Type::Int), Operator::def
         ));
-        root->v = dst;
+        // 如果 lhs != 0，直接跳到 end
+        int jmpPos = (int)buffer.size();
+        auto shortJump = new Instruction(
+            Operand(lhs->v, Type::Int), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+        );
+        buffer.push_back(shortJump);
+
+        // 2. eval rhs
+        GET_CHILD_PTR(rhs, LOrExp, 2);
+        analyzeLOrExp(rhs, buffer);
+        // rhs 的值覆盖 result
+        buffer.push_back(new Instruction(
+            Operand(rhs->v, Type::Int), Operand(), Operand(result, Type::Int), Operator::def
+        ));
+
+        // 3. patch shortJump 跳过 rhs 部分到 end
+        int endPos = (int)buffer.size();
+        shortJump->des = Operand(std::to_string(endPos - jmpPos), Type::IntLiteral);
+
+        // 4. 把 result 写回 root
+        root->v = result;
         root->t = Type::Int;
         root->is_computable = false;
     }
@@ -1224,22 +1242,44 @@ void frontend::Analyzer::analyzeLOrExp(LOrExp* root, vector<ir::Instruction*>& b
 
 // LAndExp -> EqExp [ '&&' LAndExp ]
 void frontend::Analyzer::analyzeLAndExp(LAndExp* root, vector<ir::Instruction*>& buffer) {
-    GET_CHILD_PTR(first, EqExp, 0);
-    analyzeEqExp(first, buffer);
-    COPY_EXP_NODE(first, root);
+    // 1. eval 第一项
+    GET_CHILD_PTR(lhs, EqExp, 0);
+    analyzeEqExp(lhs, buffer);
+    COPY_EXP_NODE(lhs, root);
 
-    if(root->children.size() > 1) {
-        GET_CHILD_PTR(next, LAndExp, 2);
-        analyzeLAndExp(next, buffer);
-
-        std::string dst = getTmpName();
+    // 如果有 '&& next'
+    if (root->children.size() > 1) {
+        // 为整个 and 的结果准备一个临时，初始化为 0（短路结果）
+        std::string result = getTmpName();
         buffer.push_back(new Instruction(
-            Operand(root->v, root->t),
-            Operand(next->v, next->t),
-            Operand(dst, Type::Int),
-            Operator::_and
+            Operand("0", Type::IntLiteral), Operand(), Operand(result, Type::Int), Operator::def
         ));
-        root->v = dst;
+
+        // 如果 lhs == 0，则短路到 end
+        std::string notVar = getTmpName();
+        buffer.push_back(new Instruction(
+            Operand(lhs->v, Type::Int), Operand(), Operand(notVar, Type::Int), Operator::_not
+        ));
+        int jmpPos = (int)buffer.size();
+        auto shortJump = new Instruction(
+            Operand(notVar, Type::Int), Operand(), Operand("", Type::IntLiteral), Operator::_goto
+        );
+        buffer.push_back(shortJump);
+
+        // 2. eval rhs
+        GET_CHILD_PTR(rhs, LAndExp, 2);
+        analyzeLAndExp(rhs, buffer);
+        // 将 rhs 的值覆盖 result
+        buffer.push_back(new Instruction(
+            Operand(rhs->v, Type::Int), Operand(), Operand(result, Type::Int), Operator::def
+        ));
+
+        // 3. patch shortJump 跳到 end
+        int endPos = (int)buffer.size();
+        shortJump->des = Operand(std::to_string(endPos - jmpPos), Type::IntLiteral);
+
+        // 4. 写回 root
+        root->v = result;
         root->t = Type::Int;
         root->is_computable = false;
     }
