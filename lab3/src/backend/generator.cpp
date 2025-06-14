@@ -573,35 +573,3 @@ int backend::stackVarMap::add_operand(ir::Operand op, uint32_t size) {
     _table[op] = current_offset;
     return current_offset;
 }
-
-// register allocation helpers
-
-rv::rvREG backend::Generator::getRd(ir::Operand op) {
-    // TODO: map destination operand to a register
-    TODO;
-}
-
-rv::rvFREG backend::Generator::fgetRd(ir::Operand op) {
-    // TODO: map floating-point destination
-    TODO;
-}
-
-rv::rvREG backend::Generator::getRs1(ir::Operand op) {
-    // TODO: map first source operand to register
-    TODO;
-}
-
-rv::rvREG backend::Generator::getRs2(ir::Operand op) {
-    // TODO: map second source operand to register
-    TODO;
-}
-
-rv::rvFREG backend::Generator::fgetRs1(ir::Operand op) {
-    // TODO: map first FP source operand
-    TODO;
-}
-
-rv::rvFREG backend::Generator::fgetRs2(ir::Operand op) {
-    // TODO: map second FP source operand
-    TODO;
-}
