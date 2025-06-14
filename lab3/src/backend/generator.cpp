@@ -40,14 +40,29 @@ void backend::Generator::gen_func(const ir::Function& func) {
     int frame = 1024;
     // prologue: allocate stack frame and save return address
     fout << "  addi sp, sp, -" << frame << "\n";
-    fout << "  sw ra, " << frame - 4 << "(sp)\n";
-
-    // handle function parameters: save from argument registers to stack
+    fout << "  sw ra, " << frame - 4 << "(sp)\n";    // handle function parameters
+    // First 8 params come from argument registers a0-a7, save to stack
     for (size_t i = 0; i < func.ParameterList.size() && i < 8; i++) {
         std::string argReg = "a" + std::to_string(i);
         int paramOff = svmap.find_operand(func.ParameterList[i]);
         fout << "  sw " << argReg << ", " << paramOff << "(sp)   # save param " << func.ParameterList[i].name << "\n";
-    }    // first pass: collect all jump targets
+    }
+    
+    // Params 8+ are already on stack from caller, but we need to map them
+    // to our local stack space for consistent access
+    if (func.ParameterList.size() > 8) {
+        for (size_t i = 8; i < func.ParameterList.size(); i++) {
+            // Calculate caller's stack offset for this parameter
+            // The caller pushed args in reverse order, so:
+            // arg[8] is at caller_sp + 0, arg[9] at caller_sp + 4, etc.
+            int callerArgOffset = (i - 8) * 4;
+            int paramOff = svmap.find_operand(func.ParameterList[i]);
+            
+            // Copy from caller's stack to our local stack space
+            fout << "  lw t0, " << (frame + callerArgOffset) << "(sp)  # load param " << i << " from caller stack\n";
+            fout << "  sw t0, " << paramOff << "(sp)   # save param " << func.ParameterList[i].name << "\n";
+        }
+    }// first pass: collect all jump targets
     std::set<int> jumpTargets;
     for (size_t i = 0; i < func.InstVec.size(); i++) {
         const auto& instr = *func.InstVec[i];
@@ -366,15 +381,48 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
             // check if this is a CallInst with arguments
             const ir::CallInst* callInst = dynamic_cast<const ir::CallInst*>(&instr);
             if (callInst && !callInst->argumentList.empty()) {
-                // handle function arguments - pass via a0, a1, a2, etc.
+                // handle function arguments
+                // First 8 args go to registers a0-a7
+                // Additional args go on stack (pushed in reverse order)
+                
+                // First, push args 8+ onto stack (in reverse order for correct access)
+                if (callInst->argumentList.size() > 8) {
+                    for (int i = callInst->argumentList.size() - 1; i >= 8; i--) {
+                        const auto& arg = callInst->argumentList[i];
+                        
+                        // check if this argument is a local array
+                        bool isLocalArray = false;
+                        if (func) {
+                            for (const auto& instPtr : func->InstVec) {
+                                if (instPtr->op == ir::Operator::alloc && instPtr->des.name == arg.name) {
+                                    isLocalArray = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (isLocalArray && !isGlobalVar(arg)) {
+                            // this is a local array - push its address
+                            int arrayOff = svmap.find_operand(arg);
+                            fout << "  addi t0, sp, " << arrayOff << "   # get array address\n";
+                            fout << "  addi sp, sp, -4\n";  // allocate stack space
+                            fout << "  sw t0, 0(sp)        # push array address\n";
+                        } else {
+                            // regular argument - push by value
+                            loadOperand(arg, "t0");
+                            fout << "  addi sp, sp, -4\n";  // allocate stack space
+                            fout << "  sw t0, 0(sp)        # push arg " << i << "\n";
+                        }
+                    }
+                }
+                
+                // Then, load first 8 args into registers a0-a7
                 for (size_t i = 0; i < callInst->argumentList.size() && i < 8; i++) {
                     std::string argReg = "a" + std::to_string(i);
                     const auto& arg = callInst->argumentList[i];
                     
-                    // check if this argument is a local array (has alloc instruction for it)
-                    // We need a better way to detect arrays vs regular variables
+                    // check if this argument is a local array
                     bool isLocalArray = false;
-                      // Look for alloc instruction for this operand name
                     if (func) {
                         for (const auto& instPtr : func->InstVec) {
                             if (instPtr->op == ir::Operator::alloc && instPtr->des.name == arg.name) {
@@ -393,7 +441,14 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
                         loadOperand(arg, argReg);
                     }
                 }
+                
                 fout << "  jal ra, " << instr.op1.name << "   # call function with args\n";
+                
+                // Clean up stack space used for args 8+
+                if (callInst->argumentList.size() > 8) {
+                    int stackArgsCount = callInst->argumentList.size() - 8;
+                    fout << "  addi sp, sp, " << (stackArgsCount * 4) << "  # cleanup stack args\n";
+                }
             } else {
                 fout << "  jal ra, " << instr.op1.name << "   # call function\n";
             }
