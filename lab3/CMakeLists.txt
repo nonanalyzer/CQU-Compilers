@@ -14,6 +14,8 @@ set(CMAKE_CXX_FLAGS   "-Wall")                  # 开启所有警告
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 
+set(CMAKE_C_COMPILER "/usr/bin/x86_64-linux-gnu-gcc-7")
+set(CMAKE_CXX_COMPILER	"/usr/bin/x86_64-linux-gnu-g++-7")
 
 # include
 include_directories(./include)

@@ -24,5 +24,12 @@ struct Operand {
     Operand(std::string = "null", Type = Type::null);
 };
 
+// allow using Operand as key in map
+inline bool operator<(const Operand& a, const Operand& b) {
+    if (a.name != b.name) return a.name < b.name;
+    return static_cast<int>(a.type) < static_cast<int>(b.type);
 }
+
+}
+
 #endif

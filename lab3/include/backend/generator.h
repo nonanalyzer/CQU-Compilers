@@ -9,12 +9,14 @@
 #include<string>
 #include<vector>
 #include<fstream>
+#include <cstdint>
 
 namespace backend {
 
 // it is a map bewteen variable and its mem addr, the mem addr of a local variable can be identified by ($sp + off)
 struct stackVarMap {
     std::map<ir::Operand, int> _table;
+    int next_offset = 0;
 
     /**
      * @brief find the addr of a ir::Operand
@@ -49,9 +51,14 @@ struct Generator {
     void gen();
     void gen_func(const ir::Function&);
     void gen_instr(const ir::Instruction&);
+    // stack allocation helper
+    stackVarMap svmap;
+    
+    // Helper functions for global/local variable handling
+    bool isGlobalVar(const ir::Operand& op);
+    void loadOperand(const ir::Operand& op, const std::string& reg);
+    void storeOperand(const ir::Operand& op, const std::string& reg);
 };
-
-
 
 } // namespace backend
 
