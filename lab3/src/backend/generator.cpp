@@ -74,15 +74,13 @@ void backend::Generator::gen_func(const ir::Function& func) {
                 }
             }
         }
-    }
-
-    // generate instructions with labels
+    }    // generate instructions with labels
     for (size_t i = 0; i < func.InstVec.size(); i++) {
         // insert label if this instruction is a jump target
         if (jumpTargets.find(static_cast<int>(i)) != jumpTargets.end()) {
-            fout << "label_" << i << ":\n";
+            fout << func.name << "_label_" << i << ":\n";
         }
-        gen_instr(*func.InstVec[i], static_cast<int>(i));
+        gen_instr(*func.InstVec[i], static_cast<int>(i), func.name, &func);
     }
     // epilogue: restore return address and release frame
     fout << "  lw ra, " << frame - 4 << "(sp)\n";
@@ -90,7 +88,7 @@ void backend::Generator::gen_func(const ir::Function& func) {
     fout << "  jr ra\n";
 }
 
-void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
+void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const std::string& funcName, const ir::Function* func) {
     using namespace ir;
     switch (instr.op) {        case Operator::def: {
             // if rhs is literal, use li; otherwise load from its slot
@@ -149,24 +147,48 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
                     fout << "  lw t0, 0(t2)\n";
                 }
             } else {
-                // loading from local array
-                int arrayOff = svmap.find_operand(instr.op1);
-                if (instr.op2.type == ir::Type::IntLiteral) {
-                    int idx = std::stoi(instr.op2.name) * 4;
-                    int addr_off = arrayOff + idx;
-                    fout << "  lw t0, " << addr_off << "(sp)\n";
+                // check if this is a pointer parameter (not a local array)
+                bool isLocalArray = false;
+                if (func) {
+                    for (const auto& instPtr : func->InstVec) {
+                        if (instPtr->op == ir::Operator::alloc && instPtr->des.name == instr.op1.name) {
+                            isLocalArray = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!isLocalArray && instr.op1.name.find("_scope_") != std::string::npos) {
+                    // This is likely a pointer parameter
+                    loadOperand(instr.op1, "t2");  // load pointer address
+                    if (instr.op2.type == ir::Type::IntLiteral) {
+                        int idx = std::stoi(instr.op2.name) * 4;
+                        fout << "  lw t0, " << idx << "(t2)\n";
+                    } else {
+                        loadOperand(instr.op2, "t1");
+                        fout << "  slli t1, t1, 2\n";
+                        fout << "  add t2, t2, t1\n";
+                        fout << "  lw t0, 0(t2)\n";
+                    }
                 } else {
-                    loadOperand(instr.op2, "t1");
-                    fout << "  slli t1, t1, 2\n";
-                    fout << "  addi t2, sp, " << arrayOff << "\n";
-                    fout << "  add t2, t2, t1\n";
-                    fout << "  lw t0, 0(t2)\n";
+                    // loading from local array
+                    int arrayOff = svmap.find_operand(instr.op1);
+                    if (instr.op2.type == ir::Type::IntLiteral) {
+                        int idx = std::stoi(instr.op2.name) * 4;
+                        int addr_off = arrayOff + idx;
+                        fout << "  lw t0, " << addr_off << "(sp)\n";
+                    } else {
+                        loadOperand(instr.op2, "t1");
+                        fout << "  slli t1, t1, 2\n";
+                        fout << "  addi t2, sp, " << arrayOff << "\n";
+                        fout << "  add t2, t2, t1\n";
+                        fout << "  lw t0, 0(t2)\n";
+                    }
                 }
             }
             storeOperand(instr.des, "t0");
             break;
-        }
-        case Operator::store: {
+        }        case Operator::store: {
             // store value, array, index
             loadOperand(instr.des, "t0");  // value to store
             if (isGlobalVar(instr.op1)) {
@@ -183,18 +205,43 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
                     fout << "  sw t0, 0(t2)\n";
                 }
             } else {
-                // storing to local array
-                int arrayOff = svmap.find_operand(instr.op1);
-                if (instr.op2.type == ir::Type::IntLiteral) {
-                    int idx = std::stoi(instr.op2.name) * 4;
-                    int addr_off = arrayOff + idx;
-                    fout << "  sw t0, " << addr_off << "(sp)\n";
+                // check if this is a pointer parameter (not a local array)
+                bool isLocalArray = false;
+                if (func) {
+                    for (const auto& instPtr : func->InstVec) {
+                        if (instPtr->op == ir::Operator::alloc && instPtr->des.name == instr.op1.name) {
+                            isLocalArray = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!isLocalArray && instr.op1.name.find("_scope_") != std::string::npos) {
+                    // This is likely a pointer parameter
+                    loadOperand(instr.op1, "t2");  // load pointer address
+                    if (instr.op2.type == ir::Type::IntLiteral) {
+                        int idx = std::stoi(instr.op2.name) * 4;
+                        fout << "  sw t0, " << idx << "(t2)\n";
+                    } else {
+                        loadOperand(instr.op2, "t1");
+                        fout << "  slli t1, t1, 2\n";
+                        fout << "  add t2, t2, t1\n";
+                        fout << "  sw t0, 0(t2)\n";
+                    }
                 } else {
-                    loadOperand(instr.op2, "t1");
-                    fout << "  slli t1, t1, 2\n";
-                    fout << "  addi t2, sp, " << arrayOff << "\n";
-                    fout << "  add t2, t2, t1\n";
-                    fout << "  sw t0, 0(t2)\n";
+                    // storing to local array
+                    int arrayOff = svmap.find_operand(instr.op1);
+                    if (instr.op2.type == ir::Type::IntLiteral) {
+                        int idx = std::stoi(instr.op2.name) * 4;
+                        int addr_off = arrayOff + idx;
+                        fout << "  sw t0, " << addr_off << "(sp)\n";
+                    } else {
+                        loadOperand(instr.op2, "t1");
+                        fout << "  slli t1, t1, 2\n";
+                        fout << "  addi t2, sp, " << arrayOff << "\n";
+                        fout << "  add t2, t2, t1\n";
+                        fout << "  sw t0, 0(t2)\n";
+                    }
                 }
             }
             break;
@@ -242,15 +289,22 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
             break;
         }        case ir::Operator::lss: case ir::Operator::flss: case ir::Operator::leq: case ir::Operator::fleq:
         case ir::Operator::gtr: case ir::Operator::fgtr: case ir::Operator::geq: case ir::Operator::fgeq: {
-            // only implement integer '<' and '>' for now
             loadOperand(instr.op1, "t0");
             loadOperand(instr.op2, "t1");
-            if (instr.op == ir::Operator::lss || instr.op == ir::Operator::fgtr) {
+            if (instr.op == ir::Operator::lss || instr.op == ir::Operator::flss) {
+                // t0 < t1
                 fout << "  slt t2, t0, t1\n";
-            } else if (instr.op == ir::Operator::gtr || instr.op == ir::Operator::fleq) {
+            } else if (instr.op == ir::Operator::gtr || instr.op == ir::Operator::fgtr) {
+                // t0 > t1  equivalent to  t1 < t0
                 fout << "  slt t2, t1, t0\n";
-            } else {
-                fout << "  # TODO complex compare for " << instr.draw() << "\n";
+            } else if (instr.op == ir::Operator::leq || instr.op == ir::Operator::fleq) {
+                // t0 <= t1  equivalent to  !(t0 > t1)  equivalent to  !(t1 < t0)
+                fout << "  slt t2, t1, t0\n";
+                fout << "  seqz t2, t2\n";
+            } else if (instr.op == ir::Operator::geq || instr.op == ir::Operator::fgeq) {
+                // t0 >= t1  equivalent to  !(t0 < t1)
+                fout << "  slt t2, t0, t1\n";
+                fout << "  seqz t2, t2\n";
             }
             storeOperand(instr.des, "t2");
             break;
@@ -311,7 +365,29 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
                 // handle function arguments - pass via a0, a1, a2, etc.
                 for (size_t i = 0; i < callInst->argumentList.size() && i < 8; i++) {
                     std::string argReg = "a" + std::to_string(i);
-                    loadOperand(callInst->argumentList[i], argReg);
+                    const auto& arg = callInst->argumentList[i];
+                    
+                    // check if this argument is a local array (has alloc instruction for it)
+                    // We need a better way to detect arrays vs regular variables
+                    bool isLocalArray = false;
+                      // Look for alloc instruction for this operand name
+                    if (func) {
+                        for (const auto& instPtr : func->InstVec) {
+                            if (instPtr->op == ir::Operator::alloc && instPtr->des.name == arg.name) {
+                                isLocalArray = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (isLocalArray && !isGlobalVar(arg)) {
+                        // this is a local array - pass its address
+                        int arrayOff = svmap.find_operand(arg);
+                        fout << "  addi " << argReg << ", sp, " << arrayOff << "   # pass array address\n";
+                    } else {
+                        // regular argument - pass by value
+                        loadOperand(arg, argReg);
+                    }
                 }
                 fout << "  jal ra, " << instr.op1.name << "   # call function with args\n";
             } else {
@@ -320,7 +396,7 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
             int offd = svmap.find_operand(instr.des);
             fout << "  sw a0, " << offd << "(sp)   # save return value\n";
             break;
-        }        case ir::Operator::_goto: {
+        }case ir::Operator::_goto: {
             if (instr.op1.name != "null") {
                 loadOperand(instr.op1, "t0");
                 // check if des is a number (relative offset)
@@ -340,7 +416,7 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
                 if (isNumber && !desName.empty()) {
                     int offset = std::stoi(desName);
                     int target = pc + offset;  // relative offset (can be negative)
-                    fout << "  bnez t0, label_" << target << "   # conditional goto\n";
+                    fout << "  bnez t0, " << funcName << "_label_" << target << "   # conditional goto\n";
                 } else {
                     fout << "  bnez t0, " << desName << "   # conditional goto\n";
                 }
@@ -362,7 +438,7 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
                 if (isNumber && !desName.empty()) {
                     int offset = std::stoi(desName);
                     int target = pc + offset;  // relative offset (can be negative)
-                    fout << "  j label_" << target << "   # unconditional goto\n";
+                    fout << "  j " << funcName << "_label_" << target << "   # unconditional goto\n";
                 } else {
                     fout << "  j " << desName << "   # unconditional goto\n";
                 }

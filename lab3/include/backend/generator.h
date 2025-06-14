@@ -50,7 +50,7 @@ struct Generator {
     // generate wrapper function
     void gen();
     void gen_func(const ir::Function&);
-    void gen_instr(const ir::Instruction&, int pc = 0);
+    void gen_instr(const ir::Instruction&, int pc = 0, const std::string& funcName = "", const ir::Function* func = nullptr);
     // stack allocation helper
     stackVarMap svmap;
     
