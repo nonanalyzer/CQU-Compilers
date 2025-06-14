@@ -169,14 +169,16 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
                         fout << "  slli t1, t1, 2\n";
                         fout << "  add t2, t2, t1\n";
                         fout << "  lw t0, 0(t2)\n";
-                    }
-                } else {
+                    }                } else {
                     // loading from local array
                     int arrayOff = svmap.find_operand(instr.op1);
                     if (instr.op2.type == ir::Type::IntLiteral) {
-                        int idx = std::stoi(instr.op2.name) * 4;
-                        int addr_off = arrayOff + idx;
-                        fout << "  lw t0, " << addr_off << "(sp)\n";
+                        int idx = std::stoi(instr.op2.name);
+                        fout << "  li t1, " << idx << "\n";
+                        fout << "  slli t1, t1, 2\n";
+                        fout << "  addi t2, sp, " << arrayOff << "\n";
+                        fout << "  add t2, t2, t1\n";
+                        fout << "  lw t0, 0(t2)\n";
                     } else {
                         loadOperand(instr.op2, "t1");
                         fout << "  slli t1, t1, 2\n";
@@ -227,14 +229,16 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
                         fout << "  slli t1, t1, 2\n";
                         fout << "  add t2, t2, t1\n";
                         fout << "  sw t0, 0(t2)\n";
-                    }
-                } else {
+                    }                } else {
                     // storing to local array
                     int arrayOff = svmap.find_operand(instr.op1);
                     if (instr.op2.type == ir::Type::IntLiteral) {
-                        int idx = std::stoi(instr.op2.name) * 4;
-                        int addr_off = arrayOff + idx;
-                        fout << "  sw t0, " << addr_off << "(sp)\n";
+                        int idx = std::stoi(instr.op2.name);
+                        fout << "  li t1, " << idx << "\n";
+                        fout << "  slli t1, t1, 2\n";
+                        fout << "  addi t2, sp, " << arrayOff << "\n";
+                        fout << "  add t2, t2, t1\n";
+                        fout << "  sw t0, 0(t2)\n";
                     } else {
                         loadOperand(instr.op2, "t1");
                         fout << "  slli t1, t1, 2\n";
@@ -509,9 +513,10 @@ int backend::stackVarMap::find_operand(ir::Operand op) {
 }
 
 int backend::stackVarMap::add_operand(ir::Operand op, uint32_t size) {
+    int current_offset = next_offset;
     next_offset += static_cast<int>(size);
-    _table[op] = next_offset;
-    return next_offset;
+    _table[op] = current_offset;
+    return current_offset;
 }
 
 // register allocation helpers
