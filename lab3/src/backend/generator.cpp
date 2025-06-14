@@ -23,7 +23,7 @@ void backend::Generator::gen() {
     }
     // generate text section
     fout << ".text\n";
-    fout << ".globl main\n"; // make sure main is globally visible
+    fout << ".global main\n"; // make sure main is globally visible
     for (const auto& func : program.functions) {
         gen_func(func);
     }
@@ -39,6 +39,13 @@ void backend::Generator::gen_func(const ir::Function& func) {
     // prologue: allocate stack frame and save return address
     fout << "  addi sp, sp, -" << frame << "\n";
     fout << "  sw ra, " << frame - 4 << "(sp)\n";
+
+    // handle function parameters: save from argument registers to stack
+    for (size_t i = 0; i < func.ParameterList.size() && i < 8; i++) {
+        std::string argReg = "a" + std::to_string(i);
+        int paramOff = svmap.find_operand(func.ParameterList[i]);
+        fout << "  sw " << argReg << ", " << paramOff << "(sp)   # save param " << func.ParameterList[i].name << "\n";
+    }
 
     // generate instructions
     for (auto instPtr : func.InstVec) {
@@ -93,28 +100,75 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
             fout << "  addi t1, t0, -" << imm << "\n";
             storeOperand(instr.des, "t1");
             break;
-        }
-        case Operator::load: {
-            int off1 = svmap.find_operand(instr.op1);
-            int idx = std::stoi(instr.op2.name) * 4;
-            int offd = svmap.find_operand(instr.des);
-            int addr_off = off1 + idx;
-            fout << "  lw t0, " << addr_off << "(sp)\n";
-            fout << "  sw t0, " << offd << "(sp)\n";
+        }        case Operator::load: {
+            // load dest, array, index
+            if (isGlobalVar(instr.op1)) {
+                // loading from global array
+                if (instr.op2.type == ir::Type::IntLiteral) {
+                    int idx = std::stoi(instr.op2.name) * 4;
+                    fout << "  la t2, " << instr.op1.name << "\n";
+                    fout << "  lw t0, " << idx << "(t2)\n";
+                } else {
+                    loadOperand(instr.op2, "t1");
+                    fout << "  slli t1, t1, 2\n";  // multiply by 4
+                    fout << "  la t2, " << instr.op1.name << "\n";
+                    fout << "  add t2, t2, t1\n";
+                    fout << "  lw t0, 0(t2)\n";
+                }
+            } else {
+                // loading from local array
+                int arrayOff = svmap.find_operand(instr.op1);
+                if (instr.op2.type == ir::Type::IntLiteral) {
+                    int idx = std::stoi(instr.op2.name) * 4;
+                    int addr_off = arrayOff + idx;
+                    fout << "  lw t0, " << addr_off << "(sp)\n";
+                } else {
+                    loadOperand(instr.op2, "t1");
+                    fout << "  slli t1, t1, 2\n";
+                    fout << "  addi t2, sp, " << arrayOff << "\n";
+                    fout << "  add t2, t2, t1\n";
+                    fout << "  lw t0, 0(t2)\n";
+                }
+            }
+            storeOperand(instr.des, "t0");
             break;
         }
         case Operator::store: {
-            int offv = svmap.find_operand(instr.des);
-            int off1 = svmap.find_operand(instr.op1);
-            int idx = std::stoi(instr.op2.name) * 4;
-            int addr_off = off1 + idx;
-            fout << "  lw t0, " << offv << "(sp)\n";
-            fout << "  sw t0, " << addr_off << "(sp)\n";
+            // store value, array, index
+            loadOperand(instr.des, "t0");  // value to store
+            if (isGlobalVar(instr.op1)) {
+                // storing to global array
+                if (instr.op2.type == ir::Type::IntLiteral) {
+                    int idx = std::stoi(instr.op2.name) * 4;
+                    fout << "  la t2, " << instr.op1.name << "\n";
+                    fout << "  sw t0, " << idx << "(t2)\n";
+                } else {
+                    loadOperand(instr.op2, "t1");
+                    fout << "  slli t1, t1, 2\n";
+                    fout << "  la t2, " << instr.op1.name << "\n";
+                    fout << "  add t2, t2, t1\n";
+                    fout << "  sw t0, 0(t2)\n";
+                }
+            } else {
+                // storing to local array
+                int arrayOff = svmap.find_operand(instr.op1);
+                if (instr.op2.type == ir::Type::IntLiteral) {
+                    int idx = std::stoi(instr.op2.name) * 4;
+                    int addr_off = arrayOff + idx;
+                    fout << "  sw t0, " << addr_off << "(sp)\n";
+                } else {
+                    loadOperand(instr.op2, "t1");
+                    fout << "  slli t1, t1, 2\n";
+                    fout << "  addi t2, sp, " << arrayOff << "\n";
+                    fout << "  add t2, t2, t1\n";
+                    fout << "  sw t0, 0(t2)\n";
+                }
+            }
             break;
-        }
-        case Operator::_return: {
-            int off1 = svmap.find_operand(instr.op1);
-            fout << "  lw a0, " << off1 << "(sp)\n";
+        }case Operator::_return: {
+            if (instr.op1.name != "null") {
+                loadOperand(instr.op1, "a0");
+            }
             break;
         }
         case ir::Operator::fdef: {
@@ -146,16 +200,12 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
             fout << "  " << op << " ft2, ft0, ft1\n";
             fout << "  fsw ft2, " << offd << "(sp)\n";
             break;
-        }
-        case ir::Operator::mul: case ir::Operator::div: case ir::Operator::mod: {
-            int off1 = svmap.find_operand(instr.op1);
-            int off2 = svmap.find_operand(instr.op2);
-            int offd = svmap.find_operand(instr.des);
-            fout << "  lw t0, " << off1 << "(sp)\n";
-            fout << "  lw t1, " << off2 << "(sp)\n";
+        }        case ir::Operator::mul: case ir::Operator::div: case ir::Operator::mod: {
+            loadOperand(instr.op1, "t0");
+            loadOperand(instr.op2, "t1");
             std::string op = (instr.op == ir::Operator::mul ? "mul" : instr.op == ir::Operator::div ? "div" : "rem");
             fout << "  " << op << " t2, t0, t1\n";
-            fout << "  sw t2, " << offd << "(sp)\n";
+            storeOperand(instr.des, "t2");
             break;
         }
         case ir::Operator::lss: case ir::Operator::flss: case ir::Operator::leq: case ir::Operator::fleq:
@@ -233,10 +283,20 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
             fout << "  addi t1, t0, " << idx << "   # element ptr\n";
             fout << "  sw t1, " << offd << "(sp)   # store new ptr\n";
             break;
-        }
-        case ir::Operator::call: {
+        }        case ir::Operator::call: {
+            // check if this is a CallInst with arguments
+            const ir::CallInst* callInst = dynamic_cast<const ir::CallInst*>(&instr);
+            if (callInst && !callInst->argumentList.empty()) {
+                // handle function arguments - pass via a0, a1, a2, etc.
+                for (size_t i = 0; i < callInst->argumentList.size() && i < 8; i++) {
+                    std::string argReg = "a" + std::to_string(i);
+                    loadOperand(callInst->argumentList[i], argReg);
+                }
+                fout << "  jal ra, " << instr.op1.name << "   # call function with args\n";
+            } else {
+                fout << "  jal ra, " << instr.op1.name << "   # call function\n";
+            }
             int offd = svmap.find_operand(instr.des);
-            fout << "  jal ra, " << instr.op1.name << "   # call function\n";
             fout << "  sw a0, " << offd << "(sp)   # save return value\n";
             break;
         }
@@ -250,6 +310,15 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
         }
         case ir::Operator::__unuse__: {
             // no-op
+            break;
+        }
+        case Operator::alloc: {
+            // skip alloc for global arrays - they're already allocated in .data section
+            if (!isGlobalVar(instr.des)) {
+                int size = std::stoi(instr.op1.name) * 4;
+                svmap.add_operand(instr.des, size);
+                fout << "  # alloc " << instr.des.name << " size=" << size << "\n";
+            }
             break;
         }
         default:

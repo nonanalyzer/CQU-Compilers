@@ -424,9 +424,9 @@ void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& b
         if(size == 0) {
             // 普通变量
             buffer.push_back(new Instruction(
-                Operand(root->n, t), // op1: 变量名
+                Operand("0", Type::IntLiteral), // op1: 常量值
                 Operand(), // op2: 无
-                Operand("0", Type::IntLiteral), // des: 常量值
+                Operand(root->n, t), // des: 变量名
                 t == Type::Int ? Operator::def : Operator::fdef
             ));
         }

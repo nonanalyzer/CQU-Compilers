@@ -101,6 +101,7 @@ def score_compiler(arg1):
                 for file in files:
                     if not (file[-2:] == ".s"):
                         continue
+                    print("compiling", file)
 
                     # gcc
                     fname, ftype = file.split('.')
@@ -133,7 +134,7 @@ def score_compiler(arg1):
                     else:
                         score += 1
                         record[file] = {"retval": 0}
-                    print(file, record[file])
+                    print(record[file])
                     if cp.returncode != 0:
                         break
         print("score:",score,"/",total)
