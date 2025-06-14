@@ -1,5 +1,7 @@
 #include"backend/generator.h"
 #include <cstdint>
+#include <set>
+#include <cctype>
 
 #include<assert.h>
 
@@ -45,11 +47,42 @@ void backend::Generator::gen_func(const ir::Function& func) {
         std::string argReg = "a" + std::to_string(i);
         int paramOff = svmap.find_operand(func.ParameterList[i]);
         fout << "  sw " << argReg << ", " << paramOff << "(sp)   # save param " << func.ParameterList[i].name << "\n";
+    }    // first pass: collect all jump targets
+    std::set<int> jumpTargets;
+    for (size_t i = 0; i < func.InstVec.size(); i++) {
+        const auto& instr = *func.InstVec[i];
+        if (instr.op == ir::Operator::_goto) {
+            // check if des is a number (relative offset)
+            bool isNumber = true;
+            std::string desName = instr.des.name;
+            // handle negative numbers
+            size_t startPos = 0;
+            if (!desName.empty() && desName[0] == '-') {
+                startPos = 1;
+            }
+            for (size_t j = startPos; j < desName.length(); j++) {
+                if (!std::isdigit(desName[j])) {
+                    isNumber = false;
+                    break;
+                }
+            }
+            if (isNumber && !desName.empty()) {
+                int offset = std::stoi(desName);
+                int target = static_cast<int>(i) + offset;
+                if (target >= 0 && target < static_cast<int>(func.InstVec.size())) {
+                    jumpTargets.insert(target);
+                }
+            }
+        }
     }
 
-    // generate instructions
-    for (auto instPtr : func.InstVec) {
-        gen_instr(*instPtr);
+    // generate instructions with labels
+    for (size_t i = 0; i < func.InstVec.size(); i++) {
+        // insert label if this instruction is a jump target
+        if (jumpTargets.find(static_cast<int>(i)) != jumpTargets.end()) {
+            fout << "label_" << i << ":\n";
+        }
+        gen_instr(*func.InstVec[i], static_cast<int>(i));
     }
     // epilogue: restore return address and release frame
     fout << "  lw ra, " << frame - 4 << "(sp)\n";
@@ -57,7 +90,7 @@ void backend::Generator::gen_func(const ir::Function& func) {
     fout << "  jr ra\n";
 }
 
-void backend::Generator::gen_instr(const ir::Instruction& instr) {
+void backend::Generator::gen_instr(const ir::Instruction& instr, int pc) {
     using namespace ir;
     switch (instr.op) {        case Operator::def: {
             // if rhs is literal, use li; otherwise load from its slot
@@ -207,15 +240,11 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
             fout << "  " << op << " t2, t0, t1\n";
             storeOperand(instr.des, "t2");
             break;
-        }
-        case ir::Operator::lss: case ir::Operator::flss: case ir::Operator::leq: case ir::Operator::fleq:
+        }        case ir::Operator::lss: case ir::Operator::flss: case ir::Operator::leq: case ir::Operator::fleq:
         case ir::Operator::gtr: case ir::Operator::fgtr: case ir::Operator::geq: case ir::Operator::fgeq: {
             // only implement integer '<' and '>' for now
-            int off1 = svmap.find_operand(instr.op1);
-            int off2 = svmap.find_operand(instr.op2);
-            int offd = svmap.find_operand(instr.des);
-            fout << "  lw t0, " << off1 << "(sp)\n";
-            fout << "  lw t1, " << off2 << "(sp)\n";
+            loadOperand(instr.op1, "t0");
+            loadOperand(instr.op2, "t1");
             if (instr.op == ir::Operator::lss || instr.op == ir::Operator::fgtr) {
                 fout << "  slt t2, t0, t1\n";
             } else if (instr.op == ir::Operator::gtr || instr.op == ir::Operator::fleq) {
@@ -223,41 +252,33 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
             } else {
                 fout << "  # TODO complex compare for " << instr.draw() << "\n";
             }
-            fout << "  sw t2, " << offd << "(sp)\n";
+            storeOperand(instr.des, "t2");
             break;
         }
         case ir::Operator::eq: case ir::Operator::feq: case ir::Operator::neq: case ir::Operator::fneq: {
-            int off1 = svmap.find_operand(instr.op1);
-            int off2 = svmap.find_operand(instr.op2);
-            int offd = svmap.find_operand(instr.des);
-            fout << "  lw t0, " << off1 << "(sp)\n";
-            fout << "  lw t1, " << off2 << "(sp)\n";
+            loadOperand(instr.op1, "t0");
+            loadOperand(instr.op2, "t1");
             fout << "  xor t2, t0, t1\n";
             if (instr.op == ir::Operator::eq || instr.op == ir::Operator::feq) {
                 fout << "  sltiu t2, t2, 1\n";
             } else {
                 fout << "  sltu t2, x0, t2\n";
             }
-            fout << "  sw t2, " << offd << "(sp)\n";
+            storeOperand(instr.des, "t2");
             break;
         }
         case ir::Operator::_not: {
-            int off1 = svmap.find_operand(instr.op1);
-            int offd = svmap.find_operand(instr.des);
-            fout << "  lw t0, " << off1 << "(sp)\n";
+            loadOperand(instr.op1, "t0");
             fout << "  seqz t1, t0   # requires RV64 or pseudo, fallback to xor/sltiu if not available\n";
-            fout << "  sw t1, " << offd << "(sp)\n";
+            storeOperand(instr.des, "t1");
             break;
         }
         case ir::Operator::_and: case ir::Operator::_or: {
-            int off1 = svmap.find_operand(instr.op1);
-            int off2 = svmap.find_operand(instr.op2);
-            int offd = svmap.find_operand(instr.des);
-            fout << "  lw t0, " << off1 << "(sp)\n";
-            fout << "  lw t1, " << off2 << "(sp)\n";
+            loadOperand(instr.op1, "t0");
+            loadOperand(instr.op2, "t1");
             std::string op = (instr.op == ir::Operator::_and ? "and" : "or");
             fout << "  " << op << " t2, t0, t1\n";
-            fout << "  sw t2, " << offd << "(sp)\n";
+            storeOperand(instr.des, "t2");
             break;
         }
         case ir::Operator::cvt_i2f: case ir::Operator::cvt_f2i: {
@@ -299,12 +320,52 @@ void backend::Generator::gen_instr(const ir::Instruction& instr) {
             int offd = svmap.find_operand(instr.des);
             fout << "  sw a0, " << offd << "(sp)   # save return value\n";
             break;
-        }
-        case ir::Operator::_goto: {
+        }        case ir::Operator::_goto: {
             if (instr.op1.name != "null") {
-                fout << "  bnez t0, label_" << instr.des.name << "   # conditional goto\n";
+                loadOperand(instr.op1, "t0");
+                // check if des is a number (relative offset)
+                bool isNumber = true;
+                std::string desName = instr.des.name;
+                // handle negative numbers
+                size_t startPos = 0;
+                if (!desName.empty() && desName[0] == '-') {
+                    startPos = 1;
+                }
+                for (size_t i = startPos; i < desName.length(); i++) {
+                    if (!std::isdigit(desName[i])) {
+                        isNumber = false;
+                        break;
+                    }
+                }
+                if (isNumber && !desName.empty()) {
+                    int offset = std::stoi(desName);
+                    int target = pc + offset;  // relative offset (can be negative)
+                    fout << "  bnez t0, label_" << target << "   # conditional goto\n";
+                } else {
+                    fout << "  bnez t0, " << desName << "   # conditional goto\n";
+                }
             } else {
-                fout << "  j label_" << instr.des.name << "   # unconditional goto\n";
+                // check if des is a number (relative offset)
+                bool isNumber = true;
+                std::string desName = instr.des.name;
+                // handle negative numbers
+                size_t startPos = 0;
+                if (!desName.empty() && desName[0] == '-') {
+                    startPos = 1;
+                }
+                for (size_t i = startPos; i < desName.length(); i++) {
+                    if (!std::isdigit(desName[i])) {
+                        isNumber = false;
+                        break;
+                    }
+                }
+                if (isNumber && !desName.empty()) {
+                    int offset = std::stoi(desName);
+                    int target = pc + offset;  // relative offset (can be negative)
+                    fout << "  j label_" << target << "   # unconditional goto\n";
+                } else {
+                    fout << "  j " << desName << "   # unconditional goto\n";
+                }
             }
             break;
         }
