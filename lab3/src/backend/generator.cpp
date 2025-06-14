@@ -475,7 +475,10 @@ bool backend::Generator::isGlobalVar(const ir::Operand& op) {
 
 // Helper function to load operand (global or local)
 void backend::Generator::loadOperand(const ir::Operand& op, const std::string& reg) {
-    if (isGlobalVar(op)) {
+    if (op.type == ir::Type::IntLiteral) {
+        // Load integer constant
+        fout << "  li " << reg << ", " << op.name << "\n";
+    } else if (isGlobalVar(op)) {
         fout << "  lw " << reg << ", " << op.name << "\n";
     } else {
         int off = svmap.find_operand(op);

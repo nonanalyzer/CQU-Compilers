@@ -103,10 +103,6 @@ def score_compiler(arg1):
                         continue
                     print("compiling", file)
 
-                    if "64" in file:
-                        # 做不了，告辞
-                        continue
-
                     # gcc
                     fname, ftype = file.split('.')
                     ref_file = ref_dir + fname + ".out"
