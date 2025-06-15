@@ -1289,7 +1289,7 @@ void frontend::Analyzer::analyzeLAndExp(LAndExp* root, vector<ir::Instruction*>&
 
     // 如果有 '&& next'
     if (root->children.size() > 1) {
-        // 为整个 and 的结果准备一个临时，初始化为 0（短路结果）
+        // 为整个 and 的结果准备一个临时变量，初始化为 0（短路结果）
         std::string result = getTmpName();
         buffer.push_back(new Instruction(
             Operand("0", Type::IntLiteral), Operand(), Operand(result, Type::Int), Operator::def
