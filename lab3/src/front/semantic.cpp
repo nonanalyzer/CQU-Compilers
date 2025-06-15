@@ -335,6 +335,10 @@ void frontend::Analyzer::analyzeConstInitVal(ConstInitVal* root, vector<ir::Inst
             }
             idx += 2; // 跳过 ','
         }
+
+        // 从lab3来看似乎全局变量手动补零是错的，他会自动补
+        if(symbol_table.scope_stack.size() == 1) return;
+        
         // 补零
         for (; elem < size; ++elem) {
             buffer.push_back(new Instruction(
@@ -421,6 +425,9 @@ void frontend::Analyzer::analyzeVarDef(VarDef* root, vector<ir::Instruction*>& b
     }
     // 全局变量如果没显式初始化，也要补零
     else if(symbol_table.scope_stack.size() == 1){
+        // 从lab3来看似乎全局变量手动补零是错的，他会自动补
+        if(symbol_table.scope_stack.size() == 1) return;
+        
         if(size == 0) {
             // 普通变量
             buffer.push_back(new Instruction(

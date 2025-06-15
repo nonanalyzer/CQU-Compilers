@@ -135,8 +135,6 @@ def score_compiler(arg1):
                         score += 1
                         record[file] = {"retval": 0}
                     print(record[file])
-                    if cp.returncode != 0:
-                        break
                     
         print("score:",score,"/",total)
     else:

@@ -34,13 +34,11 @@ void backend::Generator::gen() {
 void backend::Generator::gen_func(const ir::Function& func) {
     // reset stack map
     svmap = stackVarMap();
-    fout << func.name << ":\n";
-    
-    // pre-allocate a reasonable stack frame (e.g., 1024 bytes for safety)
-    int frame = 1024;
+    fout << func.name << ":\n";    // pre-allocate a larger stack frame for complex functions (within RISC-V immediate limits)
+    int frame = 2044;  // 使用2044字节，在RISC-V立即数范围内(-2048到+2047)
     // prologue: allocate stack frame and save return address
     fout << "  addi sp, sp, -" << frame << "\n";
-    fout << "  sw ra, " << frame - 4 << "(sp)\n";    // handle function parameters
+    fout << "  sw ra, " << frame - 4 << "(sp)\n";// handle function parameters
     // First 8 params come from argument registers a0-a7, save to stack
     for (size_t i = 0; i < func.ParameterList.size() && i < 8; i++) {
         std::string argReg = "a" + std::to_string(i);
@@ -57,9 +55,16 @@ void backend::Generator::gen_func(const ir::Function& func) {
             // arg[8] is at caller_sp + 0, arg[9] at caller_sp + 4, etc.
             int callerArgOffset = (i - 8) * 4;
             int paramOff = svmap.find_operand(func.ParameterList[i]);
-            
-            // Copy from caller's stack to our local stack space
-            fout << "  lw t0, " << (frame + callerArgOffset) << "(sp)  # load param " << i << " from caller stack\n";
+              // Copy from caller's stack to our local stack space
+            // Use register to handle large offsets that exceed immediate range
+            int totalOffset = frame + callerArgOffset;
+            if (totalOffset > 2047) {
+                fout << "  li t1, " << totalOffset << "\n";
+                fout << "  add t1, sp, t1\n";
+                fout << "  lw t0, 0(t1)  # load param " << i << " from caller stack\n";
+            } else {
+                fout << "  lw t0, " << totalOffset << "(sp)  # load param " << i << " from caller stack\n";
+            }
             fout << "  sw t0, " << paramOff << "(sp)   # save param " << func.ParameterList[i].name << "\n";
         }
     }// first pass: collect all jump targets
@@ -264,10 +269,13 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
                 }
             }
             break;
-        }case Operator::_return: {
+        }        case Operator::_return: {
             if (instr.op1.name != "null") {
                 loadOperand(instr.op1, "a0");
-            }
+            }            // Jump to function epilogue - use fixed frame size
+            fout << "  lw ra, 2040(sp)\n";  // frame - 4 = 2044 - 4 = 2040
+            fout << "  addi sp, sp, 2044\n";  // 恢复到原来的栈指针
+            fout << "  jr ra\n";
             break;
         }
         case ir::Operator::fdef: {
@@ -400,13 +408,32 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
                                 }
                             }
                         }
-                        
-                        if (isLocalArray && !isGlobalVar(arg)) {
+                          if (isLocalArray && !isGlobalVar(arg)) {
                             // this is a local array - push its address
                             int arrayOff = svmap.find_operand(arg);
                             fout << "  addi t0, sp, " << arrayOff << "   # get array address\n";
                             fout << "  addi sp, sp, -4\n";  // allocate stack space
                             fout << "  sw t0, 0(sp)        # push array address\n";
+                        } else if (isGlobalVar(arg)) {
+                            // Check if this is a global array (need to push address)
+                            bool isGlobalArray = false;
+                            for (const auto& gv : program.globalVal) {
+                                if (gv.val.name == arg.name && gv.maxlen > 0) {
+                                    isGlobalArray = true;
+                                    break;
+                                }
+                            }
+                            if (isGlobalArray) {
+                                // this is a global array - push its address
+                                fout << "  la t0, " << arg.name << "   # get global array address\n";
+                                fout << "  addi sp, sp, -4\n";  // allocate stack space
+                                fout << "  sw t0, 0(sp)        # push array address\n";
+                            } else {
+                                // regular global variable - push by value
+                                loadOperand(arg, "t0");
+                                fout << "  addi sp, sp, -4\n";  // allocate stack space
+                                fout << "  sw t0, 0(sp)        # push arg " << i << "\n";
+                            }
                         } else {
                             // regular argument - push by value
                             loadOperand(arg, "t0");
@@ -431,11 +458,26 @@ void backend::Generator::gen_instr(const ir::Instruction& instr, int pc, const s
                             }
                         }
                     }
-                    
-                    if (isLocalArray && !isGlobalVar(arg)) {
+                      if (isLocalArray && !isGlobalVar(arg)) {
                         // this is a local array - pass its address
                         int arrayOff = svmap.find_operand(arg);
                         fout << "  addi " << argReg << ", sp, " << arrayOff << "   # pass array address\n";
+                    } else if (isGlobalVar(arg)) {
+                        // Check if this is a global array (need to pass address)
+                        bool isGlobalArray = false;
+                        for (const auto& gv : program.globalVal) {
+                            if (gv.val.name == arg.name && gv.maxlen > 0) {
+                                isGlobalArray = true;
+                                break;
+                            }
+                        }
+                        if (isGlobalArray) {
+                            // this is a global array - pass its address
+                            fout << "  la " << argReg << ", " << arg.name << "   # pass global array address\n";
+                        } else {
+                            // regular global variable - pass by value
+                            loadOperand(arg, argReg);
+                        }
                     } else {
                         // regular argument - pass by value
                         loadOperand(arg, argReg);
